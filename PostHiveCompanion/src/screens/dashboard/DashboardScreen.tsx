@@ -17,7 +17,7 @@ import {
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation, useFocusEffect} from '@react-navigation/native';
 import {StackNavigationProp} from '@react-navigation/stack';
-import {Film, MessageCircle, ChevronRight, CheckSquare, Check, Plus, Bell, CheckCheck, X, ChevronDown, Zap, Calendar, MapPin, Video, Edit2, Save, Clock, Camera, CheckCircle, Target} from 'lucide-react-native';
+import {Film, ChevronRight, CheckSquare, Check, Plus, Bell, CheckCheck, X, ChevronDown, Zap, Calendar, MapPin, Video, Edit2, Save, Clock, Camera, CheckCircle} from 'lucide-react-native';
 import {formatDistanceToNow, format, isToday, isTomorrow, parseISO} from 'date-fns';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {Platform, TextInput} from 'react-native';
@@ -27,7 +27,7 @@ import {useAuth} from '../../hooks/useAuth';
 import {useDeliverables} from '../../hooks/useDeliverables';
 import {useTodos} from '../../hooks/useTodos';
 import {useNotifications} from '../../hooks/useNotifications';
-import {useCalendarDayData, ScheduledTask} from '../../hooks/useCalendarDayData';
+import {useCalendarDayData} from '../../hooks/useCalendarDayData';
 import {useWidgetSync} from '../../hooks/useWidgetSync';
 import {TodoItem} from '../../components/TodoItem';
 import {NotificationItem} from '../../components/NotificationItem';
@@ -39,12 +39,14 @@ import {DashboardStackParamList} from '../../app/App';
 import {updateTodo, markDeliverableAsFinal} from '../../lib/api';
 import {CongratulationsModal} from '../../components/CongratulationsModal';
 import {WorkspaceDropdownModal} from '../../components/WorkspaceDropdownModal';
+import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 
 type NavigationProp = StackNavigationProp<DashboardStackParamList, 'DashboardMain'>;
 
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
-const CARD_WIDTH = SCREEN_WIDTH * 0.75;
-const CARD_HEIGHT = 180;
+// Match webapp: 320px width, 160px height (ProjectDeliverableCard / WorkspaceDeliverablesHorizontalScroll)
+const CARD_WIDTH = Math.min(320, SCREEN_WIDTH * 0.85);
+const CARD_HEIGHT = 160;
 
 interface DeliverableCardProps {
   deliverable: Deliverable;
@@ -52,20 +54,48 @@ interface DeliverableCardProps {
   isFirst?: boolean;
 }
 
+function formatDueDateShort(dateString?: string | null): string | null {
+  if (!dateString) return null;
+  try {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+  } catch {
+    return null;
+  }
+}
+
 function HorizontalDeliverableCard({deliverable, onPress, isFirst}: DeliverableCardProps) {
   const hasUnreadComments =
     deliverable.unread_comment_count != null && deliverable.unread_comment_count > 0;
+  const isGallery = deliverable.type === 'image_gallery';
+  const isAudio = deliverable.type === 'audio';
+  const isPdf = deliverable.type === 'pdf';
+  const isDocument = deliverable.type === 'document';
 
   const timeAgo = deliverable.updated_at
     ? formatDistanceToNow(new Date(deliverable.updated_at), {addSuffix: true})
     : null;
+  const dueDateShort = formatDueDateShort(deliverable.due_date);
+
+  // Version label - match webapp ProjectDeliverableCard
+  const versionLabel = deliverable.current_version === 100
+    ? 'FINAL'
+    : isGallery
+      ? 'GALLERY'
+      : isAudio || isPdf
+        ? `V${deliverable.current_version ?? 1}`
+        : isDocument
+          ? 'DOC'
+          : deliverable.current_version != null
+            ? `V${deliverable.current_version}`
+            : null;
 
   return (
     <TouchableOpacity
       style={[styles.card, isFirst && styles.cardFirst]}
       onPress={onPress}
-      activeOpacity={0.9}>
-      {/* Thumbnail */}
+      activeOpacity={0.95}>
+      {/* Thumbnail - full cover */}
       {deliverable.thumbnail_url ? (
         <Image
           source={{uri: deliverable.thumbnail_url}}
@@ -74,40 +104,63 @@ function HorizontalDeliverableCard({deliverable, onPress, isFirst}: DeliverableC
         />
       ) : (
         <View style={styles.thumbnailPlaceholder}>
-          <Film size={40} color={theme.colors.textMuted} />
+          {isAudio ? (
+            <Film size={40} color="rgba(255,255,255,0.3)" />
+          ) : isDocument ? (
+            <Film size={40} color="rgba(255,255,255,0.3)" />
+          ) : (
+            <Film size={40} color={theme.colors.textMuted} />
+          )}
         </View>
       )}
-      
-      {/* Bottom gradient overlay */}
+
+      {/* Gradient overlay - match webapp: from-black/90 via-black/30 to-transparent */}
       <LinearGradient
-        colors={['transparent', 'rgba(0,0,0,0.4)', 'rgba(0,0,0,0.85)']}
-        locations={[0, 0.5, 1]}
+        colors={['transparent', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.9)']}
+        locations={[0, 0.4, 1]}
         style={styles.bottomGradient}
       />
-      
-      {/* Version badge - top left */}
-      {deliverable.current_version != null && (
-        <Text style={styles.versionText}>
-          {deliverable.current_version === 100 ? 'Final' : `V${deliverable.current_version}`}
-        </Text>
-      )}
-      
-      {/* Unread comments badge - top right */}
-      {hasUnreadComments && (
-        <View style={styles.unreadBadge}>
-          <MessageCircle size={11} color={theme.colors.textInverse} />
-          <Text style={styles.unreadCount}>{deliverable.unread_comment_count}</Text>
-        </View>
-      )}
-      
-      {/* Title and subtitle - bottom */}
+
+      {/* Content - match webapp layout */}
       <View style={styles.cardContent}>
-        <Text style={styles.deliverableName} numberOfLines={1}>
-          {deliverable.name}
-        </Text>
-        <Text style={styles.subtitle} numberOfLines={1}>
-          {deliverable.project_name || timeAgo}
-        </Text>
+        {/* Top row: version badge + unread */}
+        <View style={styles.cardTopRow}>
+          {versionLabel && (
+            <Text style={styles.versionText}>{versionLabel}</Text>
+          )}
+          {hasUnreadComments && (
+            <View style={styles.unreadBadge}>
+              <Text style={styles.unreadCount}>{deliverable.unread_comment_count}</Text>
+            </View>
+          )}
+        </View>
+
+        {/* Title section: project name + deliverable name */}
+        <View style={styles.titleSection}>
+          {deliverable.project_name && (
+            <Text style={styles.projectName} numberOfLines={1}>
+              {deliverable.project_name.toUpperCase()}
+            </Text>
+          )}
+          <View style={styles.titleRow}>
+            <Text style={styles.deliverableName} numberOfLines={1}>
+              {deliverable.name}
+            </Text>
+            {hasUnreadComments && (
+              <Text style={styles.unreadInline}>{deliverable.unread_comment_count}</Text>
+            )}
+          </View>
+        </View>
+
+        {/* Bottom row: comments + due date */}
+        <View style={styles.cardBottomRow}>
+          <Text style={styles.metaText}>
+            {deliverable.comment_count ?? deliverable.unread_comment_count ?? 0} COMMENTS
+          </Text>
+          {(dueDateShort || timeAgo) && (
+            <Text style={styles.metaText}>{dueDateShort || timeAgo}</Text>
+          )}
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -122,7 +175,7 @@ export function DashboardScreen() {
     new Animated.Value(0), // Hero
     new Animated.Value(0), // Deliverables
     new Animated.Value(0), // Upcoming Event
-    new Animated.Value(0), // Target Deadlines
+    new Animated.Value(0), // Upcoming Timeline
     new Animated.Value(0), // Tasks
   ]).current;
   
@@ -156,9 +209,7 @@ export function DashboardScreen() {
     userId: user?.id || '',
   });
 
-  // Get scheduled tasks to find the currently running task (same as Calendar)
-  const {scheduledTasks, calendarEvents, refresh: refreshCalendar} = useCalendarDayData({
-    date: new Date(),
+  const {calendarEvents, refresh: refreshCalendar} = useCalendarDayData({
     workspaceId: currentWorkspace?.id || '',
     userId: user?.id || '',
   });
@@ -304,26 +355,6 @@ export function DashboardScreen() {
     return dateB - dateA;
   });
 
-  // Deliverables with deadlines that are not finalized (for timeline section)
-  const deadlineDeliverables = useMemo(() => {
-    const now = new Date();
-    return deliverables
-      .filter(d => {
-        // Must have a due date
-        if (!d.due_date) return false;
-        // Must not be finalized (version 100)
-        if (d.current_version === 100) return false;
-        return true;
-      })
-      .sort((a, b) => {
-        // Sort by due date (soonest first)
-        const dateA = new Date(a.due_date!).getTime();
-        const dateB = new Date(b.due_date!).getTime();
-        return dateA - dateB;
-      })
-      .slice(0, 5); // Show max 5 items in timeline
-  }, [deliverables]);
-
   // Sync data to iOS Home Screen Widgets
   useWidgetSync({
     todos: allTodos,
@@ -333,66 +364,8 @@ export function DashboardScreen() {
     activities: widgetActivities,
   });
 
-  // Find the currently running scheduled task (same logic as CalendarScreen)
-  const activeScheduledTask = useMemo(() => {
-    const now = new Date();
-    
-    // Priority 1: Find task where now is between scheduled_start and scheduled_end
-    const currentlyRunning = scheduledTasks.find(task => {
-      try {
-        const start = new Date(task.scheduled_start);
-        const end = new Date(task.scheduled_end);
-        return now >= start && now <= end;
-      } catch {
-        return false;
-      }
-    });
-    
-    if (currentlyRunning) return currentlyRunning;
-    
-    // Priority 2: Task with status 'active' within 30 min grace period
-    const activeStatus = scheduledTasks.find(task => {
-      if (task.status !== 'active') return false;
-      try {
-        const end = new Date(task.scheduled_end);
-        const gracePeriod = 30 * 60 * 1000;
-        return now <= new Date(end.getTime() + gracePeriod);
-      } catch {
-        return false;
-      }
-    });
-    
-    return activeStatus || null;
-  }, [scheduledTasks]);
-
-  // Get the current active task - prioritize scheduled task, then in-progress todo
-  const activeTask = useMemo((): Todo | null => {
-    // First check for active scheduled task
-    if (activeScheduledTask) {
-      const allTodosArr = [...inProgressTodos, ...pendingTodos];
-      const todo = activeScheduledTask.source_type === 'todo' 
-        ? allTodosArr.find(t => t.id === activeScheduledTask.source_id)
-        : null;
-
-      return {
-        id: activeScheduledTask.source_id || activeScheduledTask.id,
-        title: activeScheduledTask.title,
-        status: 'in_progress' as const,
-        priority: todo?.priority || 'medium' as const,
-        estimated_minutes: activeScheduledTask.estimated_minutes,
-        project_name: todo?.project_name,
-        due_date: todo?.due_date,
-        due_time: todo?.due_time,
-        workspace_id: currentWorkspace?.id || '',
-        created_by: user?.id || '',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as Todo;
-    }
-    
-    // Fall back to first in-progress todo
-    return inProgressTodos[0] || null;
-  }, [activeScheduledTask, inProgressTodos, pendingTodos, currentWorkspace?.id, user?.id]);
+  // Active task for Focus Mode - use first in-progress todo
+  const activeTask = inProgressTodos[0] || null;
 
   // Find the next upcoming event
   const nextEvent = useMemo((): CalendarEvent | null => {
@@ -407,6 +380,36 @@ export function DashboardScreen() {
       });
     return upcoming[0] || null;
   }, [calendarEvents]);
+
+  // Split deliverable deadlines into upcoming and past
+  const {upcomingDeadlines, pastDeadlines} = useMemo(() => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    
+    const all = deliverables
+      .filter((d): d is Deliverable & {due_date: string} => Boolean(d.due_date))
+      .map(d => {
+        const due = new Date(d.due_date);
+        due.setHours(0, 0, 0, 0);
+        const isPast = due < now;
+        const isToday = due.getTime() === now.getTime();
+        return {deliverable: d, dueDate: due, isPast, isToday};
+      });
+    
+    // Upcoming: today and future, sorted by date ascending
+    const upcoming = all
+      .filter(d => !d.isPast)
+      .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())
+      .slice(0, 5);
+    
+    // Past: before today, sorted by date descending (most recent first)
+    const past = all
+      .filter(d => d.isPast)
+      .sort((a, b) => b.dueDate.getTime() - a.dueDate.getTime())
+      .slice(0, 3);
+    
+    return {upcomingDeadlines: upcoming, pastDeadlines: past};
+  }, [deliverables]);
 
   // Format event time nicely
   const formatEventTime = (event: CalendarEvent) => {
@@ -604,13 +607,7 @@ export function DashboardScreen() {
   );
 
   if (isLoading) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.textPrimary} />
-        </View>
-      </SafeAreaView>
-    );
+    return <BrandedLoadingScreen />;
   }
 
   return (
@@ -697,7 +694,7 @@ export function DashboardScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.horizontalList}
               decelerationRate="fast"
-              snapToInterval={CARD_WIDTH + theme.spacing.sm}
+              snapToInterval={CARD_WIDTH + theme.spacing.md}
               snapToAlignment="start">
               {sortedDeliverables.map((item, index) => (
                 <HorizontalDeliverableCard
@@ -761,116 +758,18 @@ export function DashboardScreen() {
           </Animated.View>
         )}
 
-        {/* Target Deadlines Section */}
-        {deadlineDeliverables.length > 0 && (
-          <Animated.View style={[styles.deadlineSection, {
-            opacity: sectionAnimations[3],
-            transform: [{translateY: sectionAnimations[3].interpolate({
+        {/* Tasks section */}
+        <Animated.View style={[
+          styles.tasksSection,
+          (upcomingDeadlines.length === 0 && pastDeadlines.length === 0) && styles.tasksSectionLast,
+          {
+            opacity: sectionAnimations[4],
+            transform: [{translateY: sectionAnimations[4].interpolate({
               inputRange: [0, 1],
               outputRange: [15, 0],
             })}],
-          }]}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionLabel}>TARGET DATES</Text>
-              <Text style={styles.taskCount}>{deadlineDeliverables.length}</Text>
-            </View>
-            
-            <View style={styles.deadlineList}>
-              {deadlineDeliverables.map((deliverable, index) => {
-                const dueDate = deliverable.due_date ? new Date(deliverable.due_date) : null;
-                const now = new Date();
-                const isOverdue = dueDate && dueDate < now;
-                const isToday_ = dueDate && isToday(dueDate);
-                const isTomorrow_ = dueDate && isTomorrow(dueDate);
-                const isFinalizing = finalizingDeliverableId === deliverable.id;
-                
-                let dueDateText = '';
-                if (dueDate) {
-                  if (isToday_) {
-                    dueDateText = 'Today';
-                  } else if (isTomorrow_) {
-                    dueDateText = 'Tomorrow';
-                  } else {
-                    dueDateText = format(dueDate, 'MMM d');
-                  }
-                }
-                
-                return (
-                  <View key={deliverable.id} style={styles.deadlineItem}>
-                    {/* Timeline marker */}
-                    <View style={styles.deadlineMarker}>
-                      <View style={[
-                        styles.deadlineMarkerDot,
-                        isOverdue && styles.deadlineMarkerDotOverdue,
-                        isToday_ && styles.deadlineMarkerDotToday,
-                      ]} />
-                      {index < deadlineDeliverables.length - 1 && (
-                        <View style={styles.deadlineMarkerLine} />
-                      )}
-                    </View>
-                    
-                    {/* Content */}
-                    <TouchableOpacity
-                      style={styles.deadlineContent}
-                      onPress={() => handleDeliverablePress(deliverable)}
-                      activeOpacity={0.7}>
-                      <View style={styles.deadlineTextContainer}>
-                        <Text style={styles.deadlineName} numberOfLines={1}>
-                          {deliverable.name}
-                        </Text>
-                        <View style={styles.deadlineMeta}>
-                          <Text style={[
-                            styles.deadlineDate,
-                            isOverdue && styles.deadlineDateOverdue,
-                            isToday_ && styles.deadlineDateToday,
-                          ]}>
-                            {dueDateText}
-                          </Text>
-                          {deliverable.project_name && (
-                            <>
-                              <Text style={styles.deadlineSeparator}>•</Text>
-                              <Text style={styles.deadlineProject} numberOfLines={1}>
-                                {deliverable.project_name}
-                              </Text>
-                            </>
-                          )}
-                        </View>
-                      </View>
-                      
-                      {/* Finalize button */}
-                      <TouchableOpacity
-                        style={[
-                          styles.finalizeButton,
-                          isFinalizing && styles.finalizeButtonDisabled,
-                        ]}
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          handleFinalizeDeliverable(deliverable);
-                        }}
-                        disabled={isFinalizing}
-                        hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                        {isFinalizing ? (
-                          <ActivityIndicator size="small" color={theme.colors.success} />
-                        ) : (
-                          <CheckCircle size={22} color={theme.colors.success} />
-                        )}
-                      </TouchableOpacity>
-                    </TouchableOpacity>
-                  </View>
-                );
-              })}
-            </View>
-          </Animated.View>
-        )}
-
-        {/* Tasks section */}
-        <Animated.View style={[styles.tasksSection, {
-          opacity: sectionAnimations[4],
-          transform: [{translateY: sectionAnimations[4].interpolate({
-            inputRange: [0, 1],
-            outputRange: [15, 0],
-          })}],
-        }]}>
+          }
+        ]}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionLabel}>TASKS</Text>
             <Text style={styles.taskCount}>{allTodos.length}</Text>
@@ -893,6 +792,158 @@ export function DashboardScreen() {
             renderEmptyTasks()
           )}
         </Animated.View>
+
+        {/* Deliverable Deadlines - Upcoming and Past */}
+        {(upcomingDeadlines.length > 0 || pastDeadlines.length > 0) && (
+          <Animated.View style={[styles.deadlineSection, {
+            opacity: sectionAnimations[3],
+            transform: [{translateY: sectionAnimations[3].interpolate({
+              inputRange: [0, 1],
+              outputRange: [15, 0],
+            })}],
+          }]}>
+            {/* Upcoming Deadlines */}
+            {upcomingDeadlines.length > 0 && (
+              <>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionLabel}>UPCOMING DEADLINES</Text>
+                </View>
+                <View style={styles.timelineContainer}>
+                  {upcomingDeadlines.map(({deliverable, dueDate, isToday}, index) => {
+                    const isFirst = index === 0;
+                    const isLast = index === upcomingDeadlines.length - 1;
+                    const isFinal = deliverable.status === 'final';
+                    const dotColor = isFinal 
+                      ? theme.colors.success 
+                      : isToday 
+                        ? theme.colors.warning 
+                        : theme.colors.textPrimary;
+                    return (
+                      <View key={deliverable.id} style={styles.timelineItem}>
+                        {/* Date Column */}
+                        <View style={styles.timelineDateColumn}>
+                          <Text style={[
+                            styles.timelineDateDay,
+                            isFinal && {color: theme.colors.success},
+                            !isFinal && isToday && {color: theme.colors.warning},
+                          ]}>
+                            {isToday ? 'Today' : format(dueDate, 'd')}
+                          </Text>
+                          {!isToday && (
+                            <Text style={[
+                              styles.timelineDateMonth,
+                              isFinal && {color: theme.colors.success},
+                            ]}>
+                              {format(dueDate, 'MMM')}
+                            </Text>
+                          )}
+                        </View>
+                        
+                        {/* Timeline Track */}
+                        <View style={styles.timelineTrack}>
+                          {!isFirst && <View style={[
+                            styles.timelineLineTop,
+                            isFinal && {backgroundColor: theme.colors.success},
+                          ]} />}
+                          <View style={[
+                            styles.timelineDot,
+                            {backgroundColor: dotColor},
+                            isFinal && styles.timelineDotFinal,
+                            !isFinal && isToday && styles.timelineDotToday,
+                          ]} />
+                          {!isLast && <View style={[
+                            styles.timelineLineBottom,
+                            isFinal && {backgroundColor: theme.colors.success},
+                          ]} />}
+                        </View>
+                        
+                        {/* Content Card */}
+                        <TouchableOpacity
+                          style={[
+                            styles.timelineCard,
+                            isFinal && styles.timelineCardFinal,
+                          ]}
+                          onPress={() => handleDeliverablePress(deliverable)}
+                          activeOpacity={0.8}>
+                          <View style={styles.timelineCardContent}>
+                            <Text style={[
+                              styles.timelineCardTitle,
+                              isFinal && {color: theme.colors.success},
+                            ]} numberOfLines={1}>
+                              {deliverable.name}
+                            </Text>
+                            {deliverable.project_name && (
+                              <Text style={styles.timelineCardSubtitle} numberOfLines={1}>
+                                {deliverable.project_name}
+                              </Text>
+                            )}
+                          </View>
+                          {isFinal && (
+                            <CheckCircle size={16} color={theme.colors.success} style={{marginRight: 4}} />
+                          )}
+                          <ChevronRight size={14} color={isFinal ? theme.colors.success : theme.colors.textMuted} />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+
+            {/* Past Deadlines */}
+            {pastDeadlines.length > 0 && (
+              <>
+                <View style={[styles.sectionHeader, upcomingDeadlines.length > 0 && {marginTop: 24}]}>
+                  <Text style={styles.sectionLabel}>PAST</Text>
+                </View>
+                <View style={[styles.timelineContainer, {opacity: 0.5}]}>
+                  {pastDeadlines.map(({deliverable, dueDate}, index) => {
+                    const isFirst = index === 0;
+                    const isLast = index === pastDeadlines.length - 1;
+                    return (
+                      <View key={deliverable.id} style={styles.timelineItem}>
+                        {/* Date Column */}
+                        <View style={styles.timelineDateColumn}>
+                          <Text style={[styles.timelineDateDay, {color: theme.colors.textMuted}]}>
+                            {format(dueDate, 'd')}
+                          </Text>
+                          <Text style={[styles.timelineDateMonth, {color: theme.colors.textMuted}]}>
+                            {format(dueDate, 'MMM')}
+                          </Text>
+                        </View>
+                        
+                        {/* Timeline Track */}
+                        <View style={styles.timelineTrack}>
+                          {!isFirst && <View style={[styles.timelineLineTop, {backgroundColor: theme.colors.border}]} />}
+                          <View style={[styles.timelineDot, {backgroundColor: theme.colors.textMuted}]} />
+                          {!isLast && <View style={[styles.timelineLineBottom, {backgroundColor: theme.colors.border}]} />}
+                        </View>
+                        
+                        {/* Content Card */}
+                        <TouchableOpacity
+                          style={[styles.timelineCard, {backgroundColor: theme.colors.surface}]}
+                          onPress={() => handleDeliverablePress(deliverable)}
+                          activeOpacity={0.8}>
+                          <View style={styles.timelineCardContent}>
+                            <Text style={[styles.timelineCardTitle, {color: theme.colors.textMuted}]} numberOfLines={1}>
+                              {deliverable.name}
+                            </Text>
+                            {deliverable.project_name && (
+                              <Text style={[styles.timelineCardSubtitle, {color: theme.colors.textMuted}]} numberOfLines={1}>
+                                {deliverable.project_name}
+                              </Text>
+                            )}
+                          </View>
+                          <ChevronRight size={14} color={theme.colors.textMuted} />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+          </Animated.View>
+        )}
       </ScrollView>
 
       {/* Voice Command Modal */}
@@ -939,7 +990,6 @@ export function DashboardScreen() {
             toggleStatus(activeTask);
           }
         }}
-        scheduledEnd={activeScheduledTask?.scheduled_end}
       />
 
       {/* Congratulations Modal */}
@@ -1826,27 +1876,25 @@ const styles = StyleSheet.create({
   },
   horizontalList: {
     paddingLeft: theme.spacing.md,
-    paddingRight: theme.spacing.md,
-    gap: theme.spacing.sm,
+    paddingRight: theme.spacing.xl,
+    gap: theme.spacing.md,
   },
   card: {
     width: CARD_WIDTH,
     height: CARD_HEIGHT,
     position: 'relative',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
     overflow: 'hidden',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
   },
-  cardFirst: {
-    // First card styling if needed
-  },
+  cardFirst: {},
   thumbnail: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: theme.colors.surface,
+    opacity: 0.8,
   },
   thumbnailPlaceholder: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: theme.colors.surfaceElevated,
+    backgroundColor: '#000',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1855,50 +1903,77 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    height: '70%',
-  },
-  versionText: {
-    position: 'absolute',
-    top: theme.spacing.sm,
-    left: theme.spacing.sm,
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: 12,
-    fontFamily: theme.typography.fontFamily.medium,
-  },
-  unreadBadge: {
-    position: 'absolute',
-    top: theme.spacing.sm,
-    right: theme.spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.textPrimary,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    gap: 3,
-  },
-  unreadCount: {
-    color: theme.colors.textInverse,
-    fontSize: 10,
-    fontFamily: theme.typography.fontFamily.bold,
+    height: '100%',
   },
   cardContent: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: theme.spacing.sm,
-    paddingBottom: theme.spacing.sm,
+    top: 0,
+    padding: theme.spacing.md,
+    justifyContent: 'space-between',
+  },
+  cardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  versionText: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 10,
+    fontFamily: theme.typography.fontFamily.medium,
+    letterSpacing: 1.4,
+  },
+  unreadBadge: {
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  unreadCount: {
+    color: theme.colors.textPrimary,
+    fontSize: 9,
+    fontFamily: theme.typography.fontFamily.bold,
+  },
+  titleSection: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    paddingBottom: theme.spacing.xs,
+  },
+  projectName: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    fontSize: 10,
+    fontFamily: theme.typography.fontFamily.medium,
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
   },
   deliverableName: {
+    flex: 1,
     color: theme.colors.textPrimary,
-    fontSize: 16,
+    fontSize: 18,
     fontFamily: theme.typography.fontFamily.semibold,
+    lineHeight: 22,
   },
-  subtitle: {
+  unreadInline: {
+    color: theme.colors.primary,
+    fontSize: 14,
+    fontFamily: theme.typography.fontFamily.bold,
+  },
+  cardBottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  metaText: {
     color: 'rgba(255, 255, 255, 0.6)',
-    fontSize: 12,
-    fontFamily: theme.typography.fontFamily.regular,
-    marginTop: 2,
+    fontSize: 10,
+    fontFamily: theme.typography.fontFamily.medium,
+    letterSpacing: 1.2,
   },
   emptyState: {
     alignItems: 'center',
@@ -1977,7 +2052,10 @@ const styles = StyleSheet.create({
     maxWidth: 120,
   },
   tasksSection: {
-    paddingBottom: 100, // Extra padding for FAB
+    marginBottom: theme.spacing.sm,
+  },
+  tasksSectionLast: {
+    paddingBottom: 140, // Extra padding for bottom nav when no deadlines
   },
   taskCount: {
     color: theme.colors.textDisabled,
@@ -2023,83 +2101,110 @@ const styles = StyleSheet.create({
   // Deadline Timeline styles
   deadlineSection: {
     marginBottom: theme.spacing.lg,
+    paddingBottom: 140, // Extra padding for bottom nav
   },
-  deadlineList: {
+  // New Timeline styles
+  timelineContainer: {
     paddingHorizontal: theme.spacing.md,
   },
-  deadlineItem: {
+  timelineItem: {
     flexDirection: 'row',
-    minHeight: 56,
+    alignItems: 'stretch',
+    minHeight: 64,
   },
-  deadlineMarker: {
-    width: 20,
+  timelineDateColumn: {
+    width: 44,
     alignItems: 'center',
-    paddingTop: 6,
+    justifyContent: 'flex-start',
+    paddingTop: 12,
   },
-  deadlineMarkerDot: {
-    width: 8,
-    height: 8,
-    backgroundColor: theme.colors.border,
+  timelineDateDay: {
+    color: theme.colors.textPrimary,
+    fontSize: 18,
+    fontFamily: theme.typography.fontFamily.semibold,
+    lineHeight: 20,
   },
-  deadlineMarkerDotOverdue: {
-    backgroundColor: theme.colors.error,
+  timelineDateMonth: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    fontFamily: theme.typography.fontFamily.medium,
+    textTransform: 'uppercase',
+    marginTop: 2,
   },
-  deadlineMarkerDotToday: {
-    backgroundColor: theme.colors.warning,
+  timelineTrack: {
+    width: 24,
+    alignItems: 'center',
+    position: 'relative',
   },
-  deadlineMarkerLine: {
+  timelineLineTop: {
     position: 'absolute',
-    top: 16,
-    bottom: 0,
-    width: 1,
-    backgroundColor: theme.colors.border,
-    left: 9.5,
+    top: 0,
+    height: 18,
+    width: 2,
+    backgroundColor: theme.colors.borderActive,
+    borderRadius: 1,
   },
-  deadlineContent: {
+  timelineLineBottom: {
+    position: 'absolute',
+    top: 30,
+    bottom: 0,
+    width: 2,
+    backgroundColor: theme.colors.borderActive,
+    borderRadius: 1,
+  },
+  timelineDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: theme.colors.textPrimary,
+    marginTop: 12,
+    zIndex: 1,
+  },
+  timelineDotToday: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    marginTop: 11,
+    borderWidth: 2,
+    borderColor: 'rgba(255, 193, 7, 0.3)',
+  },
+  timelineDotFinal: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    marginTop: 11,
+    borderWidth: 2,
+    borderColor: 'rgba(76, 175, 80, 0.3)',
+  },
+  timelineCard: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: theme.spacing.sm,
-    paddingLeft: theme.spacing.sm,
-    marginBottom: theme.spacing.sm,
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-    borderLeftWidth: 2,
-    borderLeftColor: 'transparent',
+    backgroundColor: theme.colors.surfaceHover,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginLeft: 8,
+    marginBottom: 8,
   },
-  deadlineTextContainer: {
+  timelineCardFinal: {
+    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(76, 175, 80, 0.2)',
+  },
+  timelineCardContent: {
     flex: 1,
     gap: 2,
   },
-  deadlineName: {
+  timelineCardTitle: {
     color: theme.colors.textPrimary,
     fontSize: 14,
     fontFamily: theme.typography.fontFamily.medium,
   },
-  deadlineMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  deadlineDate: {
+  timelineCardSubtitle: {
     color: theme.colors.textMuted,
-    fontSize: 11,
-    fontFamily: theme.typography.fontFamily.medium,
-  },
-  deadlineDateOverdue: {
-    color: theme.colors.error,
-  },
-  deadlineDateToday: {
-    color: theme.colors.warning,
-  },
-  deadlineSeparator: {
-    color: theme.colors.textDisabled,
-    fontSize: 8,
-  },
-  deadlineProject: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
+    fontSize: 12,
     fontFamily: theme.typography.fontFamily.regular,
-    maxWidth: 120,
   },
   finalizeButton: {
     width: 44,

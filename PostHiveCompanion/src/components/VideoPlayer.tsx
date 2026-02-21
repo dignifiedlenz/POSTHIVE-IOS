@@ -6,18 +6,17 @@ import {
   TouchableWithoutFeedback,
   Text,
   ActivityIndicator,
-  Dimensions,
-  StatusBar,
   Animated,
   GestureResponderEvent,
   Modal,
   BackHandler,
+  useWindowDimensions,
+  StatusBar,
 } from 'react-native';
 import Video, {OnProgressData, OnLoadData} from 'react-native-video';
 import {
   Play,
   Pause,
-  Maximize,
   Minimize,
   Volume2,
   VolumeX,
@@ -25,6 +24,8 @@ import {
   RotateCw,
   ChevronLeft,
   MoreVertical,
+  MessageCircle,
+  Fullscreen,
 } from 'lucide-react-native';
 import {theme} from '../theme';
 import {formatVideoTimestamp} from '../lib/utils';
@@ -41,11 +42,16 @@ interface VideoPlayerProps {
   onTimeUpdate?: (currentTime: number) => void;
   commentMarkers?: CommentMarker[];
   onFullscreenChange?: (isFullscreen: boolean) => void;
+  onAspectRatioChange?: (aspectRatio: number) => void;
+  fillContainer?: boolean;
   // Overlay props
   title?: string;
   onBack?: () => void;
   onMenuPress?: () => void;
   showOverlayHeader?: boolean;
+  onCommentPress?: (currentTime: number) => void;
+  /** Rendered inside fullscreen modal when provided - use for comment popup that must appear over video */
+  commentPopupOverlay?: React.ReactNode;
 }
 
 export interface VideoPlayerRef {
@@ -56,12 +62,12 @@ export interface VideoPlayerRef {
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
-  ({source, poster, onTimeUpdate, commentMarkers = [], onFullscreenChange, title, onBack, onMenuPress, showOverlayHeader = false}, ref) => {
+  ({source, poster, onTimeUpdate, commentMarkers = [], onFullscreenChange, onAspectRatioChange, fillContainer, title, onBack, onMenuPress, showOverlayHeader = false, onCommentPress, commentPopupOverlay}, ref) => {
     const videoRef = useRef<Video>(null);
     const controlsTimeout = useRef<NodeJS.Timeout | null>(null);
     const controlsOpacity = useRef(new Animated.Value(1)).current;
     const insets = useSafeAreaInsets();
-    
+
     const [isPlaying, setIsPlaying] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
@@ -69,20 +75,10 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const [showControls, setShowControls] = useState(true);
-    const [videoAspectRatio, setVideoAspectRatio] = useState(16 / 9); // Default, updated on load
+    const [videoAspectRatio, setVideoAspectRatio] = useState(16 / 9);
     const progressBarRef = useRef<View>(null);
     const progressBarLayout = useRef({x: 0, width: 0});
-    
-    // Track screen dimensions for fullscreen (updates on orientation change)
-    const [screenDimensions, setScreenDimensions] = useState(() => Dimensions.get('window'));
-    const isLandscape = screenDimensions.width > screenDimensions.height;
-
-    useEffect(() => {
-      const subscription = Dimensions.addEventListener('change', ({window}) => {
-        setScreenDimensions(window);
-      });
-      return () => subscription?.remove();
-    }, []);
+    const windowDims = useWindowDimensions();
 
     useImperativeHandle(ref, () => ({
       seekTo: (time: number) => {
@@ -96,43 +92,36 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
 
     // Auto-hide controls after 3 seconds
     const resetControlsTimer = useCallback(() => {
-      if (controlsTimeout.current) {
-        clearTimeout(controlsTimeout.current);
-      }
-      
+      if (controlsTimeout.current) clearTimeout(controlsTimeout.current);
       setShowControls(true);
-      Animated.timing(controlsOpacity, {
-        toValue: 1,
-        duration: 150,
-        useNativeDriver: true,
-      }).start();
-
+      Animated.timing(controlsOpacity, {toValue: 1, duration: 150, useNativeDriver: true}).start();
       if (isPlaying) {
         controlsTimeout.current = setTimeout(() => {
-          Animated.timing(controlsOpacity, {
-            toValue: 0,
-            duration: 300,
-            useNativeDriver: true,
-          }).start(() => setShowControls(false));
+          Animated.timing(controlsOpacity, {toValue: 0, duration: 300, useNativeDriver: true}).start(() => setShowControls(false));
         }, 3000);
       }
     }, [isPlaying, controlsOpacity]);
 
     useEffect(() => {
       resetControlsTimer();
-      return () => {
-        if (controlsTimeout.current) {
-          clearTimeout(controlsTimeout.current);
-        }
-      };
+      return () => { if (controlsTimeout.current) clearTimeout(controlsTimeout.current); };
     }, [isPlaying, resetControlsTimer]);
 
-    // Notify parent of fullscreen changes
     useEffect(() => {
       onFullscreenChange?.(isFullscreen);
     }, [isFullscreen, onFullscreenChange]);
 
-    // Handle Android back button in fullscreen
+    // Orientation = fullscreen state: landscape = fullscreen, portrait = normal layout
+    useEffect(() => {
+      const isLandscape = windowDims.width > windowDims.height;
+      if (isLandscape && !isFullscreen) {
+        setIsFullscreen(true);
+      } else if (!isLandscape && isFullscreen) {
+        setIsFullscreen(false);
+      }
+    }, [windowDims.width, windowDims.height, isFullscreen]);
+
+    // Android back button - exit fullscreen modal
     useEffect(() => {
       const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
         if (isFullscreen) {
@@ -141,34 +130,32 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         }
         return false;
       });
-
       return () => backHandler.remove();
     }, [isFullscreen]);
 
-    const handleProgress = useCallback(
-      (data: OnProgressData) => {
-        setCurrentTime(data.currentTime);
-        onTimeUpdate?.(data.currentTime);
-      },
-      [onTimeUpdate],
-    );
+    const handleProgress = useCallback((data: OnProgressData) => {
+      setCurrentTime(data.currentTime);
+      onTimeUpdate?.(data.currentTime);
+    }, [onTimeUpdate]);
 
     const handleLoad = useCallback((data: OnLoadData) => {
       setDuration(data.duration);
       setIsLoading(false);
-      // Calculate aspect ratio from video's natural size
       if (data.naturalSize?.width && data.naturalSize?.height) {
         const ratio = data.naturalSize.width / data.naturalSize.height;
         setVideoAspectRatio(ratio);
+        onAspectRatioChange?.(ratio);
       }
-    }, []);
+      // Restore playback position when video (re)loads (e.g. after fullscreen toggle)
+      if (currentTime > 0) {
+        videoRef.current?.seek(currentTime);
+      }
+    }, [onAspectRatioChange, currentTime]);
 
-    // Handle scrubbing on the progress bar
     const handleScrub = useCallback((evt: GestureResponderEvent) => {
       const barWidth = progressBarLayout.current.width;
       if (barWidth > 0 && duration > 0) {
-        const locationX = evt.nativeEvent.locationX;
-        const prog = Math.max(0, Math.min(1, locationX / barWidth));
+        const prog = Math.max(0, Math.min(1, evt.nativeEvent.locationX / barWidth));
         const seekTime = prog * duration;
         videoRef.current?.seek(seekTime);
         setCurrentTime(seekTime);
@@ -198,13 +185,22 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       resetControlsTimer();
     }, [resetControlsTimer]);
 
+    const screenDimensions = {width: windowDims.width, height: windowDims.height};
+    const isLandscape = screenDimensions.width > screenDimensions.height;
+
+    // Fullscreen: fit video to screen (no cropping)
+    const fullscreenVideoDimensions = (() => {
+      const {width: sw, height: sh} = screenDimensions;
+      const screenAspect = sw / sh;
+      if (videoAspectRatio > screenAspect) {
+        return {width: sw, height: sw / videoAspectRatio};
+      }
+      return {width: sh * videoAspectRatio, height: sh};
+    })();
+
     const handleVideoPress = useCallback(() => {
       if (showControls) {
-        Animated.timing(controlsOpacity, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-        }).start(() => setShowControls(false));
+        Animated.timing(controlsOpacity, {toValue: 0, duration: 200, useNativeDriver: true}).start(() => setShowControls(false));
       } else {
         resetControlsTimer();
       }
@@ -212,210 +208,96 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
 
     const progress = duration > 0 ? currentTime / duration : 0;
 
-    // Render the video controls overlay
-    const renderControls = () => {
-      // Calculate safe area paddings for fullscreen
-      // In landscape mode, left/right insets become more important
-      const effectiveIsLandscape = isFullscreen && isLandscape;
-      const topPadding = isFullscreen ? Math.max(insets.top, 12) : 8;
-      const bottomPadding = isFullscreen ? Math.max(insets.bottom, 20) : 8;
-      const horizontalPadding = effectiveIsLandscape 
-        ? Math.max(insets.left, insets.right, 44) // More padding in landscape for notch
-        : (isFullscreen ? Math.max(insets.left, insets.right, 20) : 12);
-      
-      return (
-        <Animated.View 
-          style={[
-            styles.controlsOverlay,
-            {opacity: controlsOpacity},
-          ]}
-          pointerEvents={showControls ? 'auto' : 'none'}>
-          {/* Top bar - hide completely in landscape fullscreen, otherwise show controls */}
-          {!effectiveIsLandscape && (
-            <View style={[
-              styles.topBar,
-              {
-                paddingTop: topPadding,
-                paddingHorizontal: horizontalPadding,
-              },
-            ]}>
-              {showOverlayHeader && onBack && !isFullscreen ? (
-                <TouchableOpacity
-                  style={styles.iconButton}
-                  onPress={onBack}
-                  hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                  <ChevronLeft size={22} color="#fff" />
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={styles.iconButton}
-                  onPress={toggleMute}
-                  hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                  {isMuted ? (
-                    <VolumeX size={18} color="#fff" />
-                  ) : (
-                    <Volume2 size={18} color="#fff" />
-                  )}
-                </TouchableOpacity>
-              )}
-              
-              {showOverlayHeader && title && !isFullscreen ? (
-                <Text style={styles.overlayTitle} numberOfLines={1}>
-                  {title}
-                </Text>
-              ) : (
-                <View style={styles.spacer} />
-              )}
-              
-              {showOverlayHeader && onMenuPress && !isFullscreen ? (
-                <TouchableOpacity
-                  style={styles.iconButton}
-                  onPress={onMenuPress}
-                  hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                  <MoreVertical size={20} color="#fff" />
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={styles.iconButton}
-                  onPress={toggleFullscreen}
-                  hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                  {isFullscreen ? (
-                    <Minimize size={18} color="#fff" />
-                  ) : (
-                    <Maximize size={18} color="#fff" />
-                  )}
-                </TouchableOpacity>
-              )}
-            </View>
+    const effectiveIsLandscape = isFullscreen && isLandscape;
+    const renderControls = (forFullscreen: boolean) => (
+      <Animated.View style={[styles.controlsOverlay, {opacity: controlsOpacity}]} pointerEvents={showControls ? 'auto' : 'none'}>
+        {!effectiveIsLandscape && (
+        <View style={[styles.topBar, {paddingTop: forFullscreen ? Math.max(insets.top, 12) : 8, paddingHorizontal: forFullscreen ? Math.max(insets.left, insets.right, 20) : Math.max(insets.left, insets.right, 12)}]}>
+          {showOverlayHeader && onBack && !forFullscreen ? (
+            <TouchableOpacity style={styles.iconButton} onPress={onBack} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+              <ChevronLeft size={22} color="#fff" />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.iconButton} onPress={toggleMute} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+              {isMuted ? <VolumeX size={18} color="#fff" /> : <Volume2 size={18} color="#fff" />}
+            </TouchableOpacity>
           )}
-          
-          {/* Spacer when top bar is hidden in landscape */}
-          {effectiveIsLandscape && <View style={styles.spacer} />}
-
-          {/* Center controls - skip back, play/pause, skip forward */}
-          <View style={styles.centerControls}>
-            <TouchableOpacity
-              style={styles.skipButton}
-              onPress={() => handleSkip(-10)}
-              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-              <RotateCcw size={24} color="#fff" />
-              <Text style={styles.skipText}>10</Text>
+          {showOverlayHeader && title && !forFullscreen ? (
+            <Text style={styles.overlayTitle} numberOfLines={1}>{title}</Text>
+          ) : (
+            <View style={styles.spacer} />
+          )}
+          {showOverlayHeader && onMenuPress && !forFullscreen ? (
+            <TouchableOpacity style={styles.iconButton} onPress={onMenuPress} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+              <MoreVertical size={20} color="#fff" />
             </TouchableOpacity>
+          ) : (
+            <View style={styles.iconButton} />
+          )}
+        </View>
+        )}
+        {effectiveIsLandscape && <View style={styles.spacer} />}
 
-            <TouchableOpacity
-              style={styles.playButton}
-              onPress={togglePlayPause}>
-              {isPlaying ? (
-                <Pause size={28} color="#fff" fill="#fff" />
-              ) : (
-                <Play size={28} color="#fff" fill="#fff" />
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.skipButton}
-              onPress={() => handleSkip(10)}
-              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-              <RotateCw size={24} color="#fff" />
-              <Text style={styles.skipText}>10</Text>
+        {onCommentPress && (
+          <View style={[styles.floatingCommentButton, forFullscreen && {bottom: Math.max(insets.bottom, 20) + 50, right: Math.max(insets.right, 16)}]} pointerEvents="box-none">
+            <TouchableOpacity style={styles.floatingCommentButtonInner} onPress={() => { setIsPlaying(false); resetControlsTimer(); onCommentPress(currentTime); }} hitSlop={{top: 12, bottom: 12, left: 12, right: 12}}>
+              <MessageCircle size={22} color="#fff" />
             </TouchableOpacity>
           </View>
+        )}
 
-          {/* Bottom bar - progress bar & time */}
-          <View style={[
-            styles.bottomBar,
-            {
-              paddingBottom: bottomPadding,
-              paddingHorizontal: horizontalPadding,
-            },
-          ]}>
-            {/* Mute button in landscape fullscreen (since top bar is hidden) */}
-            {effectiveIsLandscape && (
-              <TouchableOpacity
-                style={styles.iconButton}
-                onPress={toggleMute}
-                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                {isMuted ? (
-                  <VolumeX size={18} color="#fff" />
-                ) : (
-                  <Volume2 size={18} color="#fff" />
-                )}
-              </TouchableOpacity>
-            )}
-            
-            <Text style={styles.timeText}>
-              {formatVideoTimestamp(currentTime)}
-            </Text>
-            
-            <View
-              ref={progressBarRef}
-              style={styles.progressContainer}
-              onLayout={(e) => {
-                progressBarLayout.current = {
-                  x: e.nativeEvent.layout.x,
-                  width: e.nativeEvent.layout.width,
-                };
-              }}
-              onStartShouldSetResponder={() => true}
-              onMoveShouldSetResponder={() => true}
-              onResponderGrant={handleScrub}
-              onResponderMove={handleScrub}
-              onResponderRelease={handleScrub}>
-              <View style={styles.progressBackground}>
-                {/* Comment markers */}
-                {duration > 0 &&
-                  commentMarkers.map(marker => (
-                    <View
-                      key={marker.id}
-                      style={[
-                        styles.commentMarker,
-                        {left: `${(marker.time / duration) * 100}%`},
-                      ]}
-                    />
-                  ))}
-                <View
-                  style={[styles.progressFill, {width: `${progress * 100}%`}]}
-                />
-                <View
-                  style={[
-                    styles.progressHandle,
-                    {left: `${progress * 100}%`},
-                  ]}
-                />
-              </View>
+        <View style={styles.centerControls}>
+          <TouchableOpacity style={styles.skipButton} onPress={() => handleSkip(-10)} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+            <RotateCcw size={24} color="#fff" />
+            <Text style={styles.skipText}>10</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.playButton} onPress={togglePlayPause}>
+            {isPlaying ? <Pause size={28} color="#fff" fill="#fff" /> : <Play size={28} color="#fff" fill="#fff" />}
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.skipButton} onPress={() => handleSkip(10)} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+            <RotateCw size={24} color="#fff" />
+            <Text style={styles.skipText}>10</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={[styles.bottomBar, {paddingBottom: forFullscreen ? Math.max(insets.bottom, 20) : 8, paddingHorizontal: forFullscreen ? Math.max(insets.left, insets.right, 44) : Math.max(insets.left, insets.right, 12)}]}>
+          {effectiveIsLandscape && (
+            <TouchableOpacity style={styles.iconButton} onPress={toggleMute} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+              {isMuted ? <VolumeX size={18} color="#fff" /> : <Volume2 size={18} color="#fff" />}
+            </TouchableOpacity>
+          )}
+          <Text style={styles.timeText}>{formatVideoTimestamp(currentTime)}</Text>
+          <View
+            ref={progressBarRef}
+            style={styles.progressContainer}
+            onLayout={(e) => { progressBarLayout.current = { x: e.nativeEvent.layout.x, width: e.nativeEvent.layout.width }; }}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderGrant={handleScrub}
+            onResponderMove={handleScrub}
+            onResponderRelease={handleScrub}>
+            <View style={styles.progressBackground}>
+              {duration > 0 && commentMarkers.map(marker => (
+                <View key={marker.id} style={[styles.commentMarker, {left: `${(marker.time / duration) * 100}%`}]} />
+              ))}
+              <View style={[styles.progressFill, {width: `${progress * 100}%`}]} />
+              <View style={[styles.progressHandle, {left: `${progress * 100}%`}]} />
             </View>
-
-            <Text style={styles.timeText}>
-              {formatVideoTimestamp(duration)}
-            </Text>
-            
-            {/* Exit fullscreen button in landscape (since top bar is hidden) */}
-            {effectiveIsLandscape && (
-              <TouchableOpacity
-                style={styles.iconButton}
-                onPress={toggleFullscreen}
-                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                <Minimize size={18} color="#fff" />
-              </TouchableOpacity>
-            )}
           </View>
-        </Animated.View>
-      );
-    };
-
-    // Single Video component - always rendered, styles change based on fullscreen
-    const getVideoStyle = () => {
-      if (!isFullscreen) return styles.video;
-      // In fullscreen, video fills its container (container handles constraints)
-      return styles.fullscreenVideo;
-    };
+          <Text style={styles.timeText}>{formatVideoTimestamp(duration)}</Text>
+          <TouchableOpacity style={styles.iconButton} onPress={toggleFullscreen} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+            {forFullscreen ? <Minimize size={20} color="#fff" /> : <Fullscreen size={20} color="#fff" />}
+          </TouchableOpacity>
+        </View>
+      </Animated.View>
+    );
 
     const videoElement = (
       <Video
         ref={videoRef}
         source={{uri: source}}
         poster={poster}
-        style={getVideoStyle()}
+        style={isFullscreen ? fullscreenVideoDimensions : styles.video}
         paused={!isPlaying}
         muted={isMuted}
         repeat={false}
@@ -427,79 +309,65 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       />
     );
 
-    // Loading overlay
-    const loadingOverlay = isLoading && (
-      <View style={styles.loadingOverlay}>
-        <ActivityIndicator size="large" color="#fff" />
-      </View>
-    );
-
-    // If fullscreen, render everything in the Modal
     if (isFullscreen) {
       return (
         <>
           <StatusBar hidden />
-          
-          {/* Placeholder to maintain layout when fullscreen */}
-          <View style={styles.container}>
-            <View style={[styles.videoWrapper, {aspectRatio: videoAspectRatio}]}>
-              <View style={styles.placeholderBackground} />
-            </View>
+          <View style={[styles.container, fillContainer && styles.fillContainer]}>
+            <View style={[styles.videoWrapper, fillContainer ? styles.fillWrapper : {aspectRatio: videoAspectRatio}]} />
           </View>
-
-          {/* Fullscreen Modal */}
           <Modal
             visible
             animationType="fade"
             presentationStyle="fullScreen"
+            statusBarTranslucent
             supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}
             onRequestClose={() => setIsFullscreen(false)}>
-            <TouchableWithoutFeedback onPress={handleVideoPress}>
-              <View style={styles.fullscreenContainer}>
-                {/* Video container - fit within screen while maintaining aspect ratio */}
-                <View style={(() => {
-                  const screenAspect = screenDimensions.width / screenDimensions.height;
-                  // If video is wider than screen, constrain by width; else by height
-                  if (videoAspectRatio > screenAspect) {
-                    // Video is wider - fit to width
-                    return {
-                      width: screenDimensions.width,
-                      height: screenDimensions.width / videoAspectRatio,
-                    };
-                  } else {
-                    // Video is taller - fit to height
-                    return {
-                      height: screenDimensions.height,
-                      width: screenDimensions.height * videoAspectRatio,
-                    };
-                  }
-                })()}>
-                  {videoElement}
-                  {loadingOverlay}
-                  {renderControls()}
+            <View style={styles.fullscreenContainer}>
+              <TouchableWithoutFeedback onPress={handleVideoPress}>
+                <View style={styles.fullscreenInner}>
+                  <View
+                    style={[
+                      styles.fullscreenVideoWrapper,
+                      {
+                        position: 'absolute',
+                        left: (screenDimensions.width - fullscreenVideoDimensions.width) / 2,
+                        top: (screenDimensions.height - fullscreenVideoDimensions.height) / 2,
+                        width: fullscreenVideoDimensions.width,
+                        height: fullscreenVideoDimensions.height,
+                      },
+                    ]}>
+                    {videoElement}
+                    {isLoading && (
+                      <View style={styles.loadingOverlay}>
+                        <ActivityIndicator size="large" color="#fff" />
+                      </View>
+                    )}
+                  </View>
+                  {renderControls(true)}
+                  {commentPopupOverlay}
                 </View>
-              </View>
-            </TouchableWithoutFeedback>
+              </TouchableWithoutFeedback>
+            </View>
           </Modal>
         </>
       );
     }
 
-    // Inline (non-fullscreen) view
     return (
-      <>
-        <StatusBar hidden={false} />
-        
-        <View style={styles.container}>
-          <TouchableWithoutFeedback onPress={handleVideoPress}>
-            <View style={[styles.videoWrapper, {aspectRatio: videoAspectRatio}]}>
-              {videoElement}
-              {loadingOverlay}
-              {renderControls()}
-            </View>
-          </TouchableWithoutFeedback>
-        </View>
-      </>
+      <View style={[styles.container, fillContainer && styles.fillContainer]}>
+        <TouchableWithoutFeedback onPress={handleVideoPress}>
+          <View style={[styles.videoWrapper, fillContainer ? styles.fillWrapper : {aspectRatio: videoAspectRatio}]}>
+            {videoElement}
+            {isLoading && (
+              <View style={styles.loadingOverlay}>
+                <ActivityIndicator size="large" color="#fff" />
+              </View>
+            )}
+            {renderControls(false)}
+          </View>
+        </TouchableWithoutFeedback>
+      </View>
     );
   },
 );
@@ -508,25 +376,33 @@ const styles = StyleSheet.create({
   container: {
     backgroundColor: '#000',
   },
+  fillContainer: {
+    flex: 1,
+  },
   videoWrapper: {
     backgroundColor: '#000',
     width: '100%',
+    overflow: 'hidden',
+  },
+  fillWrapper: {
+    flex: 1,
   },
   video: {
-    flex: 1,
-  },
-  placeholderBackground: {
-    flex: 1,
-    backgroundColor: '#000',
+    width: '100%',
+    height: '100%',
   },
   fullscreenContainer: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  fullscreenInner: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  fullscreenVideo: {
-    flex: 1,
+  fullscreenVideoWrapper: {
+    backgroundColor: '#000',
+    overflow: 'hidden',
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -538,6 +414,20 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
     justifyContent: 'space-between',
+  },
+  floatingCommentButton: {
+    position: 'absolute',
+    bottom: 56,
+    right: 12,
+    alignItems: 'flex-end',
+  },
+  floatingCommentButtonInner: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   topBar: {
     flexDirection: 'row',

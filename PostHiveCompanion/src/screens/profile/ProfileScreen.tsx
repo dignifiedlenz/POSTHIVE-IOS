@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
-import {LogOut, User, Building2, Mail, RefreshCw, Bell, ChevronRight, FileText, HelpCircle, MessageSquare} from 'lucide-react-native';
+import {LogOut, User, Building2, Mail, RefreshCw, Bell, ChevronRight, FileText, HelpCircle, MessageSquare, History} from 'lucide-react-native';
 import {theme} from '../../theme';
 import {useAuth} from '../../hooks/useAuth';
 import {WorkspaceDropdownModal} from '../../components/WorkspaceDropdownModal';
@@ -118,6 +118,24 @@ export function ProfileScreen() {
         {/* Settings Section */}
         <Animated.View style={[styles.settingsSection, getAnimatedStyle(2)]}>
           <View style={styles.settingsCard}>
+            <TouchableOpacity
+              style={styles.settingsButton}
+              onPress={() => navigation.navigate('TransferHistory' as never)}
+              activeOpacity={0.7}>
+              <View style={styles.settingsButtonIcon}>
+                <History size={16} color={theme.colors.textSecondary} />
+              </View>
+              <View style={styles.settingsButtonContent}>
+                <Text style={styles.settingsButtonTitle}>Transfer History</Text>
+                <Text style={styles.settingsButtonSubtitle} numberOfLines={1}>
+                  Search files and see when they were transferred
+                </Text>
+              </View>
+              <ChevronRight size={16} color={theme.colors.textMuted} />
+            </TouchableOpacity>
+
+            <View style={styles.separator} />
+
             <TouchableOpacity
               style={styles.settingsButton}
               onPress={() => navigation.navigate('NotificationSettings' as never)}

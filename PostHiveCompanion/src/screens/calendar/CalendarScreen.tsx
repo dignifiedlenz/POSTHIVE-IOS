@@ -40,10 +40,8 @@ import {
   Circle,
   CheckCircle2,
   X,
-  Sparkles,
   ListChecks,
   ArrowRight,
-  Smartphone,
 } from 'lucide-react-native';
 import {
   format,
@@ -91,14 +89,9 @@ import {
   Deadline,
 } from '../../hooks/useCalendarDayData';
 import {Todo, CalendarEvent} from '../../lib/types';
-import {useLiveActivity} from '../../hooks/useLiveActivity';
-import {useEventLiveActivity} from '../../hooks/useEventLiveActivity';
-import {triggerAutoScheduler, updateTodoStatus, createEvent} from '../../lib/api';
+import {updateTodoStatus, createEvent} from '../../lib/api';
 import {supabase} from '../../lib/supabase';
 import {FocusModeModal} from '../../components/FocusModeModal';
-import {AppleCalendarSettings} from '../../components/AppleCalendarSettings';
-import {useAppleCalendar} from '../../hooks/useAppleCalendar';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
 const HOUR_LABEL_WIDTH = 50;
@@ -117,55 +110,12 @@ export function CalendarScreen() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isScheduling, setIsScheduling] = useState(false);
   const [activeTab, setActiveTab] = useState<'schedule' | 'tasks'>('schedule');
   const [showFocusMode, setShowFocusMode] = useState(false);
-  const [showAppleCalendarSettings, setShowAppleCalendarSettings] = useState(false);
   const [scrollY, setScrollY] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(SCREEN_HEIGHT - 300);
   const pendingScrollToTime = useRef<string | null>(null);
   const hasScrolledToCurrentTime = useRef(false);
-  const [importedEventIds, setImportedEventIds] = useState<Set<string>>(new Set());
-  const [hasPotentialImports, setHasPotentialImports] = useState(false);
-
-  // Check for potential imports from Apple Calendar
-  const {
-    events: appleCalendarEvents,
-    isEnabled: isAppleCalendarEnabled,
-    hasAccess: hasAppleCalendarAccess,
-  } = useAppleCalendar();
-
-  // Load imported event IDs and check for potential imports
-  useEffect(() => {
-    async function checkPotentialImports() {
-      try {
-        const stored = await AsyncStorage.getItem('@apple_calendar_imported_events');
-        if (stored) {
-          const imported = new Set(JSON.parse(stored));
-          setImportedEventIds(imported);
-          
-          // Check if there are unimported events
-          if (isAppleCalendarEnabled && hasAppleCalendarAccess) {
-            const newEvents = appleCalendarEvents.filter(e => !imported.has(e.id));
-            setHasPotentialImports(newEvents.length > 0);
-          } else {
-            setHasPotentialImports(false);
-          }
-        } else {
-          // If no stored imports, check if there are any events
-          if (isAppleCalendarEnabled && hasAppleCalendarAccess && appleCalendarEvents.length > 0) {
-            setHasPotentialImports(true);
-          } else {
-            setHasPotentialImports(false);
-          }
-        }
-      } catch (e) {
-        console.error('Error checking potential imports:', e);
-        setHasPotentialImports(false);
-      }
-    }
-    checkPotentialImports();
-  }, [appleCalendarEvents, isAppleCalendarEnabled, hasAppleCalendarAccess]);
 
   // Refs
   const scrollViewRef = useRef<ScrollView>(null);
@@ -248,13 +198,6 @@ export function CalendarScreen() {
   } = useCalendarDayData({
     workspaceId: currentWorkspace?.id || '',
     userId: user?.id || '',
-  });
-
-  // Event Live Activity - shows 30 min before events on Dynamic Island
-  useEventLiveActivity({
-    events: calendarEvents,
-    enabled: true,
-    onError: (error) => console.log('Event Live Activity error:', error),
   });
 
   // State for event editing
@@ -436,173 +379,8 @@ export function CalendarScreen() {
     setActiveTab(tab);
   }, []);
 
-  // Find the scheduled task that is CURRENTLY running
-  const activeScheduledTask = useMemo(() => {
-    const now = new Date();
-    
-    // Priority 1: Find task where now is between scheduled_start and scheduled_end
-    const currentlyRunning = scheduledTasks.find(task => {
-      try {
-        const start = new Date(task.scheduled_start);
-        const end = new Date(task.scheduled_end);
-        return now >= start && now <= end;
-      } catch {
-        return false;
-      }
-    });
-    
-    if (currentlyRunning) {
-      console.log('🟢 [LiveActivity] Found currently running task (by time):', currentlyRunning.title);
-      return currentlyRunning;
-    }
-    
-    // Priority 2: Task with status 'active' that hasn't ended more than 30 min ago
-    // (allows some grace for tasks that run over time)
-    const activeStatus = scheduledTasks.find(task => {
-      if (task.status !== 'active') return false;
-      try {
-        const end = new Date(task.scheduled_end);
-        const gracePeriod = 30 * 60 * 1000; // 30 minutes grace
-        return now <= new Date(end.getTime() + gracePeriod);
-      } catch {
-        return false;
-      }
-    });
-    
-    if (activeStatus) {
-      console.log('🟡 [LiveActivity] Found active status task:', activeStatus.title);
-      return activeStatus;
-    }
-    
-    console.log('⚪ [LiveActivity] No active scheduled task found');
-    return null;
-  }, [scheduledTasks]);
-
-  const activeTodo = useMemo(() => {
-    return todos.find(todo => todo.status === 'in_progress') || null;
-  }, [todos]);
-
-  // Prioritize: active scheduled task > in-progress todo
-  const activeTaskForLiveActivity = useMemo(() => {
-    // First check for active scheduled task
-    if (activeScheduledTask) {
-      // Find the corresponding todo if source_type is 'todo'
-      const todo = activeScheduledTask.source_type === 'todo' 
-        ? todos.find(t => t.id === activeScheduledTask.source_id)
-        : null;
-
-      // Create a Todo-like object from ScheduledTask
-      return {
-        id: activeScheduledTask.id,
-        title: activeScheduledTask.title,
-        status: 'in_progress' as const,
-        priority: todo?.priority || 'medium' as const,
-        estimated_minutes: activeScheduledTask.estimated_minutes,
-        project_name: todo?.project_name,
-        due_date: todo?.due_date,
-        due_time: todo?.due_time,
-        // Add other required Todo fields with defaults
-        workspace_id: currentWorkspace?.id || '',
-        created_by: user?.id || '',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as Todo;
-    }
-    
-    // Fall back to in-progress todo
-    return activeTodo;
-  }, [activeScheduledTask, activeTodo, todos, currentWorkspace?.id, user?.id]);
-
-  // Handle Live Activity button callbacks
-  const handleTaskComplete = useCallback(async (taskId: string) => {
-    console.log('🎉 Task completed from Dynamic Island:', taskId);
-    
-    try {
-      // The taskId could be a scheduled_task ID or a todo ID
-      // First, try to find it as a scheduled task
-      const scheduledTask = scheduledTasks.find(t => t.id === taskId);
-      
-      if (scheduledTask) {
-        console.log('Found scheduled task, marking as completed:', scheduledTask.title);
-        
-        // Update scheduled_task status to 'completed'
-        await supabase
-          .from('scheduled_tasks')
-          .update({ status: 'completed', updated_at: new Date().toISOString() })
-          .eq('id', taskId);
-        
-        // If the scheduled task is linked to a todo, complete that too
-        if (scheduledTask.source_type === 'todo' && scheduledTask.source_id && user?.id) {
-          console.log('Also completing linked todo:', scheduledTask.source_id);
-          await updateTodoStatus(scheduledTask.source_id, 'completed', user.id);
-        }
-      } else {
-        // It's a direct todo ID
-        const todo = todos.find(t => t.id === taskId);
-        if (todo && user?.id) {
-          console.log('Completing todo directly:', todo.title);
-          await updateTodoStatus(taskId, 'completed', user.id);
-        }
-      }
-      
-      // Trigger auto-scheduler to reschedule remaining tasks
-      if (currentWorkspace?.id) {
-        console.log('Triggering auto-scheduler...');
-        try {
-          await triggerAutoScheduler(currentWorkspace.id);
-          console.log('Auto-scheduler triggered successfully');
-        } catch (scheduleError) {
-          console.log('Auto-scheduler error (non-fatal):', scheduleError);
-        }
-      }
-      
-      // Refresh the data
-      await refresh();
-      
-      Alert.alert('Task Completed! ✓', 'Great work! The schedule has been updated.');
-      
-    } catch (error) {
-      console.error('Error completing task:', error);
-      Alert.alert('Error', 'Failed to complete task. Please try again.');
-    }
-  }, [scheduledTasks, todos, user?.id, currentWorkspace?.id, refresh]);
-
-  const handleTaskAddTime = useCallback((taskId: string, minutes: number) => {
-    console.log('⏱️ Adding', minutes, 'minutes to task:', taskId);
-    // TODO: Call API to extend task time
-    refresh();
-  }, [refresh]);
-
-  // Determine if we should show Live Activity
-  const shouldShowLiveActivity = useMemo(() => {
-    // Show if we have an active scheduled task (already validated by time/status)
-    if (activeScheduledTask) {
-      console.log('🔵 [LiveActivity] Should show: active scheduled task');
-      return true;
-    }
-    // Show if we have a todo that's in progress
-    if (activeTodo?.status === 'in_progress') {
-      console.log('🔵 [LiveActivity] Should show: in-progress todo');
-      return true;
-    }
-    console.log('⚪ [LiveActivity] Should NOT show: no active task');
-    return false;
-  }, [activeScheduledTask, activeTodo]);
-
-  // Manage Live Activity for active task
-  useLiveActivity({
-    task: activeTaskForLiveActivity,
-    isActive: shouldShowLiveActivity,
-    // Pass the scheduled task's actual time frame
-    scheduledStart: activeScheduledTask?.scheduled_start || null,
-    scheduledEnd: activeScheduledTask?.scheduled_end || null,
-    // Button callbacks
-    onComplete: handleTaskComplete,
-    onAddTime: handleTaskAddTime,
-    onError: (error) => {
-      console.error('Live Activity error:', error);
-    },
-  });
+  // Active task for Focus Mode - use first in-progress todo
+  const activeTask = useMemo(() => todos.find(t => t.status === 'in_progress') || null, [todos]);
 
   // Pan responder for swipe gestures
   const panResponder = useMemo(
@@ -679,45 +457,6 @@ export function CalendarScreen() {
     await refresh();
     setIsRefreshing(false);
   }, [refresh]);
-
-  // Auto scheduler handler
-  const handleAutoSchedule = useCallback(async () => {
-    if (!currentWorkspace?.id) {
-      Alert.alert('Error', 'No workspace selected');
-      return;
-    }
-
-    setIsScheduling(true);
-    try {
-      const result = await triggerAutoScheduler(currentWorkspace.id);
-      
-      if (result.skipped) {
-        Alert.alert(
-          'Auto Scheduler',
-          result.reason || 'Scheduling was skipped',
-          [{text: 'OK'}],
-        );
-      } else if (result.success) {
-        Alert.alert(
-          'Auto Scheduler',
-          `Successfully scheduled ${result.scheduled_count || 0} task(s)`,
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                // Refresh calendar data after scheduling
-                refresh();
-              },
-            },
-          ],
-        );
-      }
-    } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to trigger auto scheduler');
-    } finally {
-      setIsScheduling(false);
-    }
-  }, [currentWorkspace?.id, refresh]);
 
   // Date display
   const dateDisplay = useMemo(() => {
@@ -829,20 +568,6 @@ export function CalendarScreen() {
         <View style={styles.headerTop}>
           <Text style={styles.sectionLabel}>CALENDAR</Text>
           <View style={styles.headerActions}>
-            <TouchableOpacity
-              style={[styles.autoScheduleButton, isScheduling && styles.autoScheduleButtonDisabled]}
-              onPress={handleAutoSchedule}
-              disabled={isScheduling}
-              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-              {isScheduling ? (
-                <ActivityIndicator size="small" color={theme.colors.textPrimary} />
-              ) : (
-                <Sparkles size={14} color={theme.colors.textPrimary} />
-              )}
-              <Text style={styles.autoScheduleButtonText}>
-                {isScheduling ? 'SCHEDULING...' : 'AUTO SCHEDULE'}
-              </Text>
-            </TouchableOpacity>
             {!isToday(selectedDate) && (
               <TouchableOpacity style={styles.todayButton} onPress={goToToday}>
                 <Text style={styles.todayButtonText}>TODAY</Text>
@@ -1192,24 +917,6 @@ export function CalendarScreen() {
         />
       )}
 
-      {/* Potential Imports Popup - Fixed above Next Event Bar */}
-      {hasPotentialImports && (
-        <View style={[styles.importsPopup, {bottom: nextUpcoming ? 170 : 100}]}>
-          <View style={styles.importsPopupContent}>
-            <View style={styles.importsPopupLeft}>
-              <Smartphone size={16} color={theme.colors.textPrimary} />
-              <Text style={styles.importsPopupText}>
-                {appleCalendarEvents.filter(e => !importedEventIds.has(e.id)).length} event{appleCalendarEvents.filter(e => !importedEventIds.has(e.id)).length !== 1 ? 's' : ''} available to import
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.importsPopupButton}
-              onPress={() => setShowAppleCalendarSettings(true)}>
-              <Text style={styles.importsPopupButtonText}>IMPORT</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
 
 
       {/* Month Picker Modal */}
@@ -1226,56 +933,16 @@ export function CalendarScreen() {
       {/* Focus Mode Modal */}
       <FocusModeModal
         visible={showFocusMode}
-        task={activeTaskForLiveActivity}
+        task={activeTask}
         onClose={() => setShowFocusMode(false)}
-        onComplete={() => {
-          if (activeTaskForLiveActivity) {
-            handleTaskComplete(activeTaskForLiveActivity.id);
+        onComplete={async () => {
+          if (activeTask && user?.id) {
+            await updateTodoStatus(activeTask.id, 'completed', user.id);
+            await refresh();
           }
         }}
-        scheduledEnd={activeScheduledTask?.scheduled_end}
       />
 
-      {/* Apple Calendar Settings Modal */}
-      <Modal
-        visible={showAppleCalendarSettings}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => {
-          setShowAppleCalendarSettings(false);
-          // Refresh imported event IDs when modal closes
-          AsyncStorage.getItem('@apple_calendar_imported_events').then(stored => {
-            if (stored) {
-              setImportedEventIds(new Set(JSON.parse(stored)));
-            }
-          }).catch(() => {});
-        }}>
-        <SafeAreaView style={{flex: 1, backgroundColor: theme.colors.background}}>
-          <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: theme.colors.border}}>
-            <Text style={{fontSize: 18, fontWeight: '600', color: theme.colors.text}}>Calendar Settings</Text>
-            <TouchableOpacity onPress={() => {
-              setShowAppleCalendarSettings(false);
-              // Refresh imported event IDs when modal closes
-              AsyncStorage.getItem('@apple_calendar_imported_events').then(stored => {
-                if (stored) {
-                  setImportedEventIds(new Set(JSON.parse(stored)));
-                }
-              }).catch(() => {});
-            }}>
-              <X size={24} color={theme.colors.text} />
-            </TouchableOpacity>
-          </View>
-          <AppleCalendarSettings onClose={() => {
-            setShowAppleCalendarSettings(false);
-            // Refresh imported event IDs when modal closes
-            AsyncStorage.getItem('@apple_calendar_imported_events').then(stored => {
-              if (stored) {
-                setImportedEventIds(new Set(JSON.parse(stored)));
-              }
-            }).catch(() => {});
-          }} />
-        </SafeAreaView>
-      </Modal>
 
       {/* Event Detail Modal */}
       <EventDetailModal
@@ -2109,7 +1776,7 @@ function NextEventBar({item, onPress}: {item: NextEventItem; onPress: () => void
 const monthPickerStyles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'transparent', // Show wave background
+    backgroundColor: theme.colors.background,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     overflow: 'hidden',
@@ -2118,6 +1785,7 @@ const monthPickerStyles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: theme.spacing.xs,
     paddingBottom: theme.spacing.xs / 2,
+    backgroundColor: theme.colors.background,
   },
   dragHandle: {
     width: 40,
@@ -2135,6 +1803,7 @@ const monthPickerStyles = StyleSheet.create({
     minHeight: 48,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
+    backgroundColor: theme.colors.background,
   },
   closeButton: {
     padding: theme.spacing.xs,
@@ -2180,7 +1849,7 @@ const monthPickerStyles = StyleSheet.create({
   monthNavButton: {
     padding: theme.spacing.sm,
     borderRadius: 8,
-    backgroundColor: 'transparent', // Show wave background
+    backgroundColor: theme.colors.surface,
   },
   monthTitle: {
     color: theme.colors.textPrimary,
@@ -2199,16 +1868,19 @@ const monthPickerStyles = StyleSheet.create({
   },
   calendarScrollView: {
     flex: 1,
+    backgroundColor: theme.colors.background,
   },
   calendarScrollContent: {
     flexGrow: 1,
     paddingTop: theme.spacing.xs,
+    backgroundColor: theme.colors.background,
   },
   weekDays: {
     flexDirection: 'row',
     paddingHorizontal: theme.spacing.lg,
     marginBottom: theme.spacing.xs,
     paddingTop: theme.spacing.xs,
+    backgroundColor: theme.colors.background,
   },
   weekDayLabel: {
     flex: 1,
@@ -2223,6 +1895,7 @@ const monthPickerStyles = StyleSheet.create({
     flexWrap: 'wrap',
     paddingHorizontal: theme.spacing.lg,
     paddingBottom: theme.spacing.md,
+    backgroundColor: theme.colors.background,
   },
   dayCell: {
     width: (SCREEN_WIDTH - theme.spacing.lg * 2 - 14) / 7, // Account for padding and margin
@@ -2232,6 +1905,7 @@ const monthPickerStyles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: 8,
     margin: 1,
+    backgroundColor: theme.colors.surface,
   },
   selectedDay: {
     backgroundColor: theme.colors.accent,
@@ -2247,7 +1921,7 @@ const monthPickerStyles = StyleSheet.create({
     marginBottom: 0,
   },
   otherMonthDay: {
-    color: theme.colors.textDisabled,
+    color: theme.colors.textMuted,
   },
   selectedDayText: {
     color: theme.colors.accentText,
@@ -3040,25 +2714,6 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily.bold,
     letterSpacing: 1,
   },
-  autoScheduleButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: 4,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceElevated,
-  },
-  autoScheduleButtonDisabled: {
-    opacity: 0.6,
-  },
-  autoScheduleButtonText: {
-    color: theme.colors.textPrimary,
-    fontSize: 10,
-    fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 1,
-  },
   sectionLabel: {
     color: theme.colors.textMuted,
     fontSize: 11,
@@ -3665,47 +3320,4 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily.bold,
   },
   // Imports Popup
-  importsPopup: {
-    position: 'absolute',
-    left: theme.spacing.md,
-    right: theme.spacing.md,
-    zIndex: 1000,
-  },
-  importsPopupContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    borderRadius: 20,
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  importsPopupLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-    flex: 1,
-  },
-  importsPopupText: {
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.sm,
-    fontFamily: theme.typography.fontFamily.medium,
-    flex: 1,
-  },
-  importsPopupButton: {
-    paddingHorizontal: theme.spacing.lg,
-    paddingVertical: theme.spacing.sm,
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: theme.colors.textPrimary,
-    borderRadius: 8,
-  },
-  importsPopupButtonText: {
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.xs,
-    fontFamily: theme.typography.fontFamily.bold,
-    letterSpacing: 1,
-  },
 });

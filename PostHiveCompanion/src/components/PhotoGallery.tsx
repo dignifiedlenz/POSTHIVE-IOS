@@ -91,38 +91,64 @@ export function PhotoGallery({photos, initialIndex = 0, onClose}: PhotoGalleryPr
       // Extract file extension from URL or default to .jpg
       const urlPath = currentPhoto.url.split('?')[0];
       const extension = urlPath.split('.').pop()?.toLowerCase() || 'jpg';
-      const validExtension = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'].includes(extension) 
-        ? extension 
-        : 'jpg';
+      // Supported photo formats on iOS Camera Roll
+      const supportedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'heic', 'heif', 'tiff', 'tif', 'bmp'];
+      const validExtension = supportedExtensions.includes(extension) ? extension : 'jpg';
       
       // Download the file to a temporary location first
-      const fileName = `posthive_photo_${Date.now()}.${validExtension}`;
+      const fileName = `PostHive_photo_${Date.now()}.${validExtension}`;
       tempFilePath = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/${fileName}`;
       
-      console.log('Downloading photo to:', tempFilePath);
+      console.log('Downloading photo from:', currentPhoto.url);
       
       const response = await ReactNativeBlobUtil.config({
         fileCache: true,
         path: tempFilePath,
+        followRedirect: true,
       }).fetch('GET', currentPhoto.url);
       
-      const downloadedPath = response.path();
-      console.log('Downloaded to:', downloadedPath);
+      const status = response.info().status;
+      console.log('Download response status:', status);
       
-      // Save the downloaded file to camera roll
-      await CameraRoll.save(`file://${downloadedPath}`, {
-        type: 'photo',
-        album: 'PostHive',
-      });
-
-      Alert.alert('Downloaded', 'Photo saved to your camera roll');
-      
-      // Clean up temp file
-      try {
-        await ReactNativeBlobUtil.fs.unlink(downloadedPath);
-      } catch (cleanupError) {
-        console.log('Cleanup error (non-critical):', cleanupError);
+      if (status !== 200) {
+        throw new Error(`Download failed with status ${status}`);
       }
+      
+      const downloadedPath = response.path();
+      const fileStats = await ReactNativeBlobUtil.fs.stat(downloadedPath);
+      console.log('Downloaded file size:', fileStats.size, 'bytes');
+      
+      // Try to save to camera roll
+      try {
+        await CameraRoll.save(`file://${downloadedPath}`, {
+          type: 'photo',
+          album: 'PostHive',
+        });
+
+        Alert.alert('Saved', 'Photo saved to your Camera Roll');
+      } catch (cameraRollError: any) {
+        // If camera roll fails (e.g., unsupported format), fall back to share sheet
+        console.log('Camera Roll save failed, falling back to share sheet:', cameraRollError);
+        
+        if (cameraRollError?.message?.includes('3302') || cameraRollError?.code === 3302) {
+          // Format not supported - use share sheet instead
+          await RNShare.share({
+            url: `file://${downloadedPath}`,
+            title: fileName,
+          });
+        } else {
+          throw cameraRollError;
+        }
+      }
+      
+      // Clean up temp file after a delay (share sheet might still need it)
+      setTimeout(async () => {
+        try {
+          await ReactNativeBlobUtil.fs.unlink(downloadedPath);
+        } catch (cleanupError) {
+          console.log('Cleanup error (non-critical):', cleanupError);
+        }
+      }, 5000);
     } catch (error) {
       console.error('Download error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to download photo';
@@ -133,8 +159,11 @@ export function PhotoGallery({photos, initialIndex = 0, onClose}: PhotoGalleryPr
           'Permission Required',
           'Please grant photo library access in Settings to save photos.',
         );
+      } else if (errorMessage.includes('cancelled') || errorMessage.includes('canceled')) {
+        // User cancelled share sheet - not an error
+        console.log('Share cancelled by user');
       } else {
-        Alert.alert('Download Failed', errorMessage || 'Failed to download photo. Please try again.');
+        Alert.alert('Save Failed', errorMessage || 'Failed to save photo. Please try again.');
       }
       
       // Clean up temp file on error

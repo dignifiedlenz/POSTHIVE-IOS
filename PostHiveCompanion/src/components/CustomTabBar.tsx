@@ -42,8 +42,8 @@ const iconMap: Record<string, React.ComponentType<{size: number; color: string; 
   ProfileTab: User,
 };
 
-// Tab positions: Home, Calendar, [FAB], Projects, Profile
-const tabOrder = ['DashboardTab', 'CalendarTab', 'FAB', 'ReviewTab', 'ProfileTab'];
+// Tab positions: Home, Projects, [FAB], Calendar, Profile
+const tabOrder = ['DashboardTab', 'ReviewTab', 'FAB', 'CalendarTab', 'ProfileTab'];
 
 interface TabItemProps {
   route: {key: string; name: string};
@@ -296,8 +296,8 @@ export function CustomTabBar({state, descriptors, navigation}: BottomTabBarProps
   }));
 
   // Reorder routes to match visual order (with FAB space in middle)
-  const leftRoutes = state.routes.filter(r => ['DashboardTab', 'CalendarTab'].includes(r.name));
-  const rightRoutes = state.routes.filter(r => ['ReviewTab', 'ProfileTab'].includes(r.name));
+  const leftRoutes = state.routes.filter(r => ['DashboardTab', 'ReviewTab'].includes(r.name));
+  const rightRoutes = state.routes.filter(r => ['CalendarTab', 'ProfileTab'].includes(r.name));
 
   return (
     <Animated.View 
@@ -331,7 +331,7 @@ export function CustomTabBar({state, descriptors, navigation}: BottomTabBarProps
         
         {/* Tab items */}
         <View style={styles.tabsContainer}>
-          {/* Left tabs: Home, Calendar */}
+          {/* Left tabs: Home, Projects */}
           {leftRoutes.map((route) => {
             const {options} = descriptors[route.key];
             const isFocused = state.routes[state.index]?.name === route.name;
@@ -370,7 +370,7 @@ export function CustomTabBar({state, descriptors, navigation}: BottomTabBarProps
           {/* Center FAB */}
           <FABButton />
           
-          {/* Right tabs: Projects, Profile */}
+          {/* Right tabs: Calendar, Profile */}
           {rightRoutes.map((route) => {
             const {options} = descriptors[route.key];
             const isFocused = state.routes[state.index]?.name === route.name;

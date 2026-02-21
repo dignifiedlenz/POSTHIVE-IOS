@@ -11,4 +11,10 @@ export {PhotoGallery, PhotoGrid} from './PhotoGallery';
 export type {Photo} from './PhotoGallery';
 export {BlueprintBackground} from './BlueprintBackground';
 export {NoisyWaveBackground} from './NoisyWaveBackground';
+export {BrandedLoadingScreen} from './BrandedLoadingScreen';
+export {AudioWaveform} from './AudioWaveform';
+export {
+  AudioPlayerWithWaveform,
+  type AudioPlayerWithWaveformRef,
+} from './AudioPlayerWithWaveform';
 

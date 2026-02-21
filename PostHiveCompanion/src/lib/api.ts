@@ -9,6 +9,7 @@ import {
   Workspace,
   Project,
   Client,
+  Series,
   CreateProjectInput,
   CreateDeliverableInput,
   CreateEventInput,
@@ -635,6 +636,9 @@ export async function getDeliverableVersions(deliverableId: string) {
       bunny_stream_video_id: asset?.bunny_stream_video_id,
       bunny_thumbnail_url: asset?.bunny_thumbnail_url,
       processing_status: asset?.processing_status,
+      // Include storage URLs for download functionality
+      storage_url: asset?.storage_url,
+      r2_url: asset?.r2_url,
     };
   });
 }
@@ -1325,6 +1329,7 @@ export async function getProjectDeliverables(
     `,
     )
     .eq('project_id', projectId)
+    .is('series_id', null)
     .order('updated_at', {ascending: false});
 
   if (error) {
@@ -1626,6 +1631,35 @@ export async function createClientReviewShareLink(
 // ===== CREATE EVENT =====
 
 const API_BASE_URL = 'https://www.posthive.app'; // Production Next.js app (use www to avoid redirect stripping auth header)
+
+// ===== DOWNLOAD URL (PRESIGNED) =====
+
+/** Get a signed/download-ready URL for a storage URL. Resolves presigned URLs for B2, adds download params for Bunny, etc. */
+export async function getDownloadUrl(storageUrl: string, filename?: string): Promise<string> {
+  const {data: sessionData} = await supabase.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) {
+    throw new Error('Not authenticated');
+  }
+
+  const response = await fetch(`${API_BASE_URL}/api/downloads/signed-url`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({storageUrl, filename}),
+  });
+
+  const data = await parseJSONResponse(response);
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to get download URL');
+  }
+  if (!data.signedUrl) {
+    throw new Error('No download URL returned');
+  }
+  return data.signedUrl;
+}
 
 // ===== MARK COMMENTS AS READ =====
 
@@ -1957,7 +1991,505 @@ export async function unmarkDeliverableAsFinal(
   return {success: true, message: data.message || 'Deliverable unmarked as final'};
 }
 
+// ===== SERIES =====
+
+export async function getWorkspaceSeries(workspaceId: string): Promise<Series[]> {
+  const {data: projects} = await supabase
+    .from('projects')
+    .select('id')
+    .eq('workspace_id', workspaceId)
+    .neq('status', 'archived');
+
+  const projectIds = (projects || []).map((p: any) => p.id);
+  if (projectIds.length === 0) return [];
+
+  const {data, error} = await supabase
+    .from('series')
+    .select('*')
+    .in('project_id', projectIds)
+    .order('updated_at', {ascending: false});
+
+  if (error) throw error;
+  const seriesItems = data || [];
+  if (seriesItems.length === 0) return [];
+
+  const seriesIds = seriesItems.map((s: any) => s.id);
+  const {data: deliverables} = await supabase
+    .from('deliverables')
+    .select('id, series_id, thumbnail_url, thumbnail')
+    .in('series_id', seriesIds);
+
+  const countMap: Record<string, number> = {};
+  const thumbnailMap: Record<string, string> = {};
+  (deliverables || []).forEach((d: any) => {
+    if (d.series_id) {
+      countMap[d.series_id] = (countMap[d.series_id] || 0) + 1;
+      if (!thumbnailMap[d.series_id] && (d.thumbnail_url || d.thumbnail)) {
+        thumbnailMap[d.series_id] = d.thumbnail_url || d.thumbnail;
+      }
+    }
+  });
+
+  const deliverableIds = (deliverables || []).map((d: any) => d.id);
+  let assetThumbnails: Record<string, string> = {};
+  if (deliverableIds.length > 0) {
+    try {
+      const {data: versions} = await supabase
+        .from('versions')
+        .select('deliverable_id, file_url, thumbnail_url, version_number')
+        .in('deliverable_id', deliverableIds)
+        .order('version_number', {ascending: false});
+      const latestVersionByDeliverable: Record<string, any> = {};
+      (versions || []).forEach((v: any) => {
+        if (!latestVersionByDeliverable[v.deliverable_id]) {
+          latestVersionByDeliverable[v.deliverable_id] = v;
+        }
+      });
+      const {data: uploads} = await supabase
+        .from('version_uploads')
+        .select('deliverable_id, version_number, asset_id')
+        .in('deliverable_id', deliverableIds);
+      const assetIds = [...new Set((uploads || []).map((u: any) => u.asset_id).filter(Boolean))];
+      let assetMap: Record<string, any> = {};
+      if (assetIds.length > 0) {
+        const {data: assets} = await supabase
+          .from('assets')
+          .select('id, bunny_thumbnail_url, bunny_stream_video_id, bunny_hls_url, provider')
+          .in('id', assetIds);
+        (assets || []).forEach((a: any) => { assetMap[a.id] = a; });
+      }
+      deliverableIds.forEach((deliverableId: string) => {
+        const version = latestVersionByDeliverable[deliverableId];
+        if (!version) return;
+        let thumb: string | undefined;
+        const linkedUpload = (uploads || []).find(
+          (u: any) => u.deliverable_id === deliverableId && u.version_number === version.version_number,
+        );
+        if (linkedUpload && assetMap[linkedUpload.asset_id]) {
+          const asset = assetMap[linkedUpload.asset_id];
+          if (asset.bunny_thumbnail_url) thumb = asset.bunny_thumbnail_url;
+          else if (asset.bunny_stream_video_id && asset.provider !== 'cloudflare' && !asset.bunny_hls_url?.includes('videodelivery.net')) {
+            thumb = constructBunnyThumbnail(asset.bunny_stream_video_id, version.file_url);
+          }
+        }
+        if (!thumb && version.file_url) {
+          const guid = extractBunnyGuid(version.file_url);
+          if (guid) thumb = constructBunnyThumbnail(guid, version.file_url);
+        }
+        if (!thumb && version.thumbnail_url) thumb = version.thumbnail_url;
+        if (thumb) assetThumbnails[deliverableId] = thumb;
+      });
+    } catch (err) {
+      console.error('[Series] Error fetching asset thumbnails:', err);
+    }
+  }
+  (deliverables || []).forEach((d: any) => {
+    if (d.series_id && !thumbnailMap[d.series_id] && assetThumbnails[d.id]) {
+      thumbnailMap[d.series_id] = assetThumbnails[d.id];
+    }
+  });
+  return seriesItems.map((s: any) => ({
+    ...s,
+    item_count: countMap[s.id] || 0,
+    thumbnail: s.thumbnail || thumbnailMap[s.id] || null,
+  }));
+}
+
+export async function getProjectSeries(projectId: string): Promise<Series[]> {
+  const {data, error} = await supabase
+    .from('series')
+    .select('*')
+    .eq('project_id', projectId)
+    .order('created_at', {ascending: false});
+
+  if (error) {
+    throw error;
+  }
+
+  const seriesItems = data || [];
+  if (seriesItems.length === 0) {
+    return [];
+  }
+
+  // Get item counts and thumbnails from deliverables
+  const seriesIds = seriesItems.map((s: any) => s.id);
+
+  const {data: deliverables} = await supabase
+    .from('deliverables')
+    .select('id, series_id, thumbnail_url, thumbnail')
+    .in('series_id', seriesIds);
+
+  const countMap: Record<string, number> = {};
+  const thumbnailMap: Record<string, string> = {};
+  (deliverables || []).forEach((d: any) => {
+    if (d.series_id) {
+      countMap[d.series_id] = (countMap[d.series_id] || 0) + 1;
+      if (!thumbnailMap[d.series_id] && (d.thumbnail_url || d.thumbnail)) {
+        thumbnailMap[d.series_id] = d.thumbnail_url || d.thumbnail;
+      }
+    }
+  });
+
+  // Fetch asset thumbnails for series items (using latest deliverable)
+  const deliverableIds = (deliverables || []).map((d: any) => d.id);
+  let assetThumbnails: Record<string, string> = {};
+
+  if (deliverableIds.length > 0) {
+    try {
+      const {data: versions} = await supabase
+        .from('versions')
+        .select('deliverable_id, file_url, thumbnail_url, version_number')
+        .in('deliverable_id', deliverableIds)
+        .order('version_number', {ascending: false});
+
+      const latestVersionByDeliverable: Record<string, any> = {};
+      (versions || []).forEach((v: any) => {
+        if (!latestVersionByDeliverable[v.deliverable_id]) {
+          latestVersionByDeliverable[v.deliverable_id] = v;
+        }
+      });
+
+      const {data: uploads} = await supabase
+        .from('version_uploads')
+        .select('deliverable_id, version_number, asset_id')
+        .in('deliverable_id', deliverableIds);
+
+      const assetIds = [...new Set((uploads || []).map((u: any) => u.asset_id).filter(Boolean))];
+      let assetMap: Record<string, any> = {};
+
+      if (assetIds.length > 0) {
+        const {data: assets} = await supabase
+          .from('assets')
+          .select('id, bunny_thumbnail_url, bunny_stream_video_id, bunny_hls_url, provider')
+          .in('id', assetIds);
+
+        (assets || []).forEach((a: any) => {
+          assetMap[a.id] = a;
+        });
+      }
+
+      // Build deliverable -> thumbnail map
+      deliverableIds.forEach((deliverableId: string) => {
+        const version = latestVersionByDeliverable[deliverableId];
+        if (!version) return;
+
+        let thumb: string | undefined;
+        const linkedUpload = (uploads || []).find(
+          (u: any) => u.deliverable_id === deliverableId && u.version_number === version.version_number,
+        );
+
+        if (linkedUpload && assetMap[linkedUpload.asset_id]) {
+          const asset = assetMap[linkedUpload.asset_id];
+          if (asset.bunny_thumbnail_url) {
+            thumb = asset.bunny_thumbnail_url;
+          } else if (asset.bunny_stream_video_id && asset.provider !== 'cloudflare' && !asset.bunny_hls_url?.includes('videodelivery.net')) {
+            thumb = constructBunnyThumbnail(asset.bunny_stream_video_id, version.file_url);
+          }
+        }
+
+        if (!thumb && version.file_url) {
+          const guid = extractBunnyGuid(version.file_url);
+          if (guid) {
+            thumb = constructBunnyThumbnail(guid, version.file_url);
+          }
+        }
+
+        if (!thumb && version.thumbnail_url) {
+          thumb = version.thumbnail_url;
+        }
+
+        if (thumb) {
+          assetThumbnails[deliverableId] = thumb;
+        }
+      });
+    } catch (err) {
+      console.error('[Series] Error fetching asset thumbnails:', err);
+    }
+  }
+
+  // Pick best thumbnail for each series
+  (deliverables || []).forEach((d: any) => {
+    if (d.series_id && !thumbnailMap[d.series_id] && assetThumbnails[d.id]) {
+      thumbnailMap[d.series_id] = assetThumbnails[d.id];
+    }
+  });
+
+  return seriesItems.map((s: any) => ({
+    ...s,
+    item_count: countMap[s.id] || 0,
+    thumbnail: s.thumbnail || thumbnailMap[s.id] || null,
+  }));
+}
+
+export async function getSeriesItems(seriesId: string): Promise<Deliverable[]> {
+  const {data, error} = await supabase
+    .from('deliverables')
+    .select(
+      `
+      *,
+      project:projects(name),
+      versions(*)
+    `,
+    )
+    .eq('series_id', seriesId)
+    .order('updated_at', {ascending: false});
+
+  if (error) {
+    throw error;
+  }
+
+  const deliverables = data || [];
+  if (deliverables.length === 0) {
+    return [];
+  }
+
+  // Fetch asset thumbnails (same logic as getProjectDeliverables)
+  const deliverableIds = deliverables.map((d: any) => d.id);
+  let assetThumbnails: Record<string, string> = {};
+
+  if (deliverableIds.length > 0) {
+    try {
+      const {data: versions} = await supabase
+        .from('versions')
+        .select('deliverable_id, file_url, thumbnail_url, version_number')
+        .in('deliverable_id', deliverableIds)
+        .order('version_number', {ascending: false});
+
+      const latestVersionByDeliverable: Record<string, any> = {};
+      (versions || []).forEach((v: any) => {
+        if (!latestVersionByDeliverable[v.deliverable_id]) {
+          latestVersionByDeliverable[v.deliverable_id] = v;
+        }
+      });
+
+      const {data: uploads} = await supabase
+        .from('version_uploads')
+        .select('deliverable_id, version_number, asset_id')
+        .in('deliverable_id', deliverableIds);
+
+      const assetIds = [...new Set((uploads || []).map((u: any) => u.asset_id).filter(Boolean))];
+      let assetMap: Record<string, any> = {};
+
+      if (assetIds.length > 0) {
+        const {data: assets} = await supabase
+          .from('assets')
+          .select('id, bunny_thumbnail_url, bunny_stream_video_id, bunny_hls_url, provider')
+          .in('id', assetIds);
+
+        (assets || []).forEach((a: any) => {
+          assetMap[a.id] = a;
+        });
+      }
+
+      deliverableIds.forEach((deliverableId: string) => {
+        const version = latestVersionByDeliverable[deliverableId];
+        if (!version) return;
+
+        let thumb: string | undefined;
+        const linkedUpload = (uploads || []).find(
+          (u: any) => u.deliverable_id === deliverableId && u.version_number === version.version_number,
+        );
+
+        if (linkedUpload && assetMap[linkedUpload.asset_id]) {
+          const asset = assetMap[linkedUpload.asset_id];
+          if (asset.bunny_thumbnail_url) {
+            thumb = asset.bunny_thumbnail_url;
+          } else if (asset.bunny_stream_video_id && asset.provider !== 'cloudflare' && !asset.bunny_hls_url?.includes('videodelivery.net')) {
+            thumb = constructBunnyThumbnail(asset.bunny_stream_video_id, version.file_url);
+          }
+        }
+
+        if (!thumb && version.file_url) {
+          const guid = extractBunnyGuid(version.file_url);
+          if (guid) {
+            thumb = constructBunnyThumbnail(guid, version.file_url);
+          }
+        }
+
+        if (!thumb && version.thumbnail_url) {
+          thumb = version.thumbnail_url;
+        }
+
+        if (thumb) {
+          assetThumbnails[deliverableId] = thumb;
+        }
+      });
+    } catch (err) {
+      console.error('[Series Items] Error fetching asset thumbnails:', err);
+    }
+  }
+
+  return deliverables.map((d: any) => {
+    const versions = d.versions || [];
+    const latestVersion = versions.sort(
+      (a: {version_number: number}, b: {version_number: number}) =>
+        b.version_number - a.version_number,
+    )[0];
+
+    const thumbnailUrl = resolveThumbnail({
+      deliverable_thumbnail_url: d.thumbnail_url,
+      deliverable_thumbnail: d.thumbnail,
+      asset_bunny_thumbnail_url: assetThumbnails[d.id],
+      version_file_url: latestVersion?.file_url,
+      version_thumbnail_url: latestVersion?.thumbnail_url,
+      deliverable_type: d.type,
+    });
+
+    return {
+      ...d,
+      project_name: d.project?.name,
+      current_version: latestVersion?.version_number,
+      thumbnail_url: thumbnailUrl || null,
+    };
+  });
+}
+
+export interface CreateSeriesShareLinkInput {
+  seriesId: string;
+  expiresInDays?: number;
+  password?: string | null;
+  allowDownloads?: boolean;
+}
+
+export async function createSeriesShareLink(
+  input: CreateSeriesShareLinkInput,
+): Promise<ShareLink> {
+  const {data: sessionData} = await supabase.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+
+  if (!accessToken) {
+    throw new Error('Not authenticated');
+  }
+
+  const response = await fetch(`${API_BASE_URL}/api/series-review/create`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      seriesId: input.seriesId,
+      expiresInDays: input.expiresInDays || 30,
+      password: input.password || null,
+      allowDownloads: input.allowDownloads !== false,
+    }),
+  });
+
+  const data = await parseJSONResponse(response);
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to create series share link');
+  }
+
+  return {url: data.link.url};
+}
+
 // ===== AUTO SCHEDULER =====
+
+// ===== TRANSFER HISTORY =====
+
+export interface TransferFile {
+  name?: string;
+  fileName?: string;
+  sourcePath?: string;
+  destPath?: string;
+  destinationPaths?: string[];
+  fileSize?: number;
+  size?: number;
+  isDirectory?: boolean;
+  category?: string;
+  cameraName?: string;
+  mediaType?: string;
+  packageType?: string;
+}
+
+export interface TransferOperation {
+  id: string;
+  operation_type: string;
+  source_path: string;
+  destination_path: string;
+  destinations?: Array<{path: string; label?: string}>;
+  files_processed: number;
+  total_size: number;
+  status: string;
+  started_at: string;
+  completed_at: string;
+  transfer_name?: string;
+  project_name?: string;
+  workspace_name?: string;
+  performed_by_name?: string;
+  device_name?: string;
+  files_data?: TransferFile[];
+}
+
+export async function getTransferHistory(
+  workspaceId: string,
+  limit = 100,
+): Promise<TransferOperation[]> {
+  // RLS allows viewing transfers for user's workspaces
+  const {data, error} = await supabase
+    .from('file_transfer_operations')
+    .select(
+      'id, operation_type, source_path, destination_path, destinations, files_processed, total_size, status, started_at, completed_at, transfer_name, device_name, files_data, project_id, workspace_id',
+    )
+    .eq('workspace_id', workspaceId)
+    .order('started_at', {ascending: false})
+    .limit(limit);
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data || data.length === 0) {
+    return [];
+  }
+
+  // Enrich with project/workspace names if we have IDs
+  const projectIds = [...new Set((data as any[]).map((r: any) => r.project_id).filter(Boolean))];
+  const workspaceIds = [...new Set((data as any[]).map((r: any) => r.workspace_id).filter(Boolean))];
+
+  let projectMap: Record<string, string> = {};
+  let workspaceMap: Record<string, string> = {};
+
+  if (projectIds.length > 0) {
+    const {data: projects} = await supabase
+      .from('projects')
+      .select('id, name')
+      .in('id', projectIds);
+    (projects || []).forEach((p: any) => {
+      projectMap[p.id] = p.name;
+    });
+  }
+
+  if (workspaceIds.length > 0) {
+    const {data: workspaces} = await supabase
+      .from('workspaces')
+      .select('id, name')
+      .in('id', workspaceIds);
+    (workspaces || []).forEach((w: any) => {
+      workspaceMap[w.id] = w.name;
+    });
+  }
+
+  return (data as any[]).map(row => ({
+    id: row.id,
+    operation_type: row.operation_type,
+    source_path: row.source_path,
+    destination_path: row.destination_path,
+    destinations: row.destinations,
+    files_processed: row.files_processed,
+    total_size: row.total_size,
+    status: row.status,
+    started_at: row.started_at,
+    completed_at: row.completed_at,
+    transfer_name: row.transfer_name,
+    project_name: row.project_id ? projectMap[row.project_id] : undefined,
+    workspace_name: row.workspace_id ? workspaceMap[row.workspace_id] : undefined,
+    performed_by_name: undefined,
+    device_name: row.device_name,
+    files_data: row.files_data || [],
+  }));
+}
 
 export async function triggerAutoScheduler(
   workspaceId: string,

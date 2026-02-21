@@ -13,8 +13,6 @@
 		0D52591F2F1EF26600B66C3B /* TaskLiveActivityWidgetControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D52591B2F1EF26600B66C3B /* TaskLiveActivityWidgetControl.swift */; };
 		0D5259202F1EF26600B66C3B /* TaskLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D5259192F1EF26600B66C3B /* TaskLiveActivityWidget.swift */; };
 		0D5259222F1EF26600B66C3B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0D5259152F1EF26600B66C3B /* Assets.xcassets */; };
-		0D8AD63A2F0DCF980065B491 /* AppleCalendarModule.m in Sources */ = {isa = PBXBuildFile; fileRef = 0D8AD6382F0DCF980065B491 /* AppleCalendarModule.m */; };
-		0D8AD63B2F0DCF980065B491 /* AppleCalendarModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D8AD6392F0DCF980065B491 /* AppleCalendarModule.swift */; };
 		0D8AD6422F13C2810065B491 /* WidgetModule.m in Sources */ = {isa = PBXBuildFile; fileRef = 0D8AD6402F13C2810065B491 /* WidgetModule.m */; };
 		0D8AD6432F13C2810065B491 /* WidgetModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D8AD6412F13C2810065B491 /* WidgetModule.swift */; };
 		0DAA6F3C2EF2B2D700776220 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0DAA6F3B2EF2B2D700776220 /* WidgetKit.framework */; };
@@ -89,8 +87,6 @@
 		0D5259192F1EF26600B66C3B /* TaskLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskLiveActivityWidget.swift; sourceTree = "<group>"; };
 		0D52591A2F1EF26600B66C3B /* TaskLiveActivityWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskLiveActivityWidgetBundle.swift; sourceTree = "<group>"; };
 		0D52591B2F1EF26600B66C3B /* TaskLiveActivityWidgetControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskLiveActivityWidgetControl.swift; sourceTree = "<group>"; };
-		0D8AD6382F0DCF980065B491 /* AppleCalendarModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppleCalendarModule.m; sourceTree = "<group>"; };
-		0D8AD6392F0DCF980065B491 /* AppleCalendarModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleCalendarModule.swift; sourceTree = "<group>"; };
 		0D8AD63F2F13C2090065B491 /* TaskLiveActivityWidgetExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TaskLiveActivityWidgetExtension.entitlements; sourceTree = "<group>"; };
 		0D8AD6402F13C2810065B491 /* WidgetModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WidgetModule.m; sourceTree = "<group>"; };
 		0D8AD6412F13C2810065B491 /* WidgetModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetModule.swift; sourceTree = "<group>"; };
@@ -156,8 +152,6 @@
 			children = (
 				0D8AD6402F13C2810065B491 /* WidgetModule.m */,
 				0D8AD6412F13C2810065B491 /* WidgetModule.swift */,
-				0D8AD6382F0DCF980065B491 /* AppleCalendarModule.m */,
-				0D8AD6392F0DCF980065B491 /* AppleCalendarModule.swift */,
 				0DAA6F792EF2BE2A00776220 /* LiveActivityModule.m */,
 				0DAA6F772EF2BB9100776220 /* LiveActivityModule.swift */,
 				0DD0520E2EF1F7AF0030E943 /* PostHiveCompanion.entitlements */,
@@ -432,10 +426,8 @@
 				0DAA6F782EF2BB9100776220 /* LiveActivityModule.swift in Sources */,
 				0DAA6F7A2EF2BE2A00776220 /* LiveActivityModule.m in Sources */,
 				PUSH0001000000000000000001 /* PushNotificationModule.m in Sources */,
-				0D8AD63A2F0DCF980065B491 /* AppleCalendarModule.m in Sources */,
 				0D8AD6422F13C2810065B491 /* WidgetModule.m in Sources */,
 				0D8AD6432F13C2810065B491 /* WidgetModule.swift in Sources */,
-				0D8AD63B2F0DCF980065B491 /* AppleCalendarModule.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

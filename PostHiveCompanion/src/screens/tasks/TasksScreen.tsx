@@ -46,9 +46,9 @@ import {
   endOfWeek,
 } from 'date-fns';
 import {theme} from '../../theme';
+import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useAuth} from '../../hooks/useAuth';
 import {useTodos} from '../../hooks/useTodos';
-import {useLiveActivity} from '../../hooks/useLiveActivity';
 import {TodoItem} from '../../components/TodoItem';
 import {VoiceCommandModal} from '../../components/VoiceCommandModal';
 import {Input, Button} from '../../components/ui';
@@ -626,18 +626,6 @@ export function TasksScreen() {
   const [showDetails, setShowDetails] = useState(false);
   const [showVoiceCommand, setShowVoiceCommand] = useState(false);
 
-  // Get the currently active task (first in-progress task)
-  const activeTask = inProgressTodos[0] || null;
-
-  // Manage Live Activity for active task
-  useLiveActivity({
-    task: activeTask,
-    isActive: !!activeTask && activeTask.status === 'in_progress',
-    onError: (error) => {
-      console.error('Live Activity error:', error);
-    },
-  });
-
   // Combine all todos for list view (excluding completed)
   const allTodos = useMemo(() => {
     return [...pendingTodos, ...inProgressTodos].sort((a, b) => {
@@ -856,13 +844,7 @@ export function TasksScreen() {
   );
 
   if (isLoading) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.accent} />
-        </View>
-      </SafeAreaView>
-    );
+    return <BrandedLoadingScreen message="Loading tasks..." />;
   }
 
   return (

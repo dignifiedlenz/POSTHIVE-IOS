@@ -15,7 +15,3 @@
 // Forward declare Live Activity module
 @interface LiveActivityModule : NSObject <RCTBridgeModule>
 @end
-
-// Forward declare Apple Calendar module
-@interface AppleCalendarModule : RCTEventEmitter <RCTBridgeModule>
-@end

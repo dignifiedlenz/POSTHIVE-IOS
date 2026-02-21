@@ -12,6 +12,7 @@ import {SafeAreaView} from 'react-native-safe-area-context';
 import {Bell, CheckCheck} from 'lucide-react-native';
 import {useNavigation} from '@react-navigation/native';
 import {theme} from '../../theme';
+import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useAuth} from '../../hooks/useAuth';
 import {useNotifications} from '../../hooks/useNotifications';
 import {NotificationItem} from '../../components/NotificationItem';
@@ -107,13 +108,7 @@ export function NotificationsScreen() {
   );
 
   if (isLoading) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.textPrimary} />
-        </View>
-      </SafeAreaView>
-    );
+    return <BrandedLoadingScreen message="Loading notifications..." />;
   }
 
   return (

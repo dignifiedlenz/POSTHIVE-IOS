@@ -10,22 +10,24 @@ import {
   ActivityIndicator,
   Dimensions,
   Animated,
+  Share,
+  Alert,
 } from 'react-native';
 import {useNavigation, useRoute, RouteProp} from '@react-navigation/native';
 import {StackNavigationProp} from '@react-navigation/stack';
-import {ChevronLeft, Film, MessageCircle, Folder} from 'lucide-react-native';
+import {ChevronLeft, Film, MessageCircle, Share2} from 'lucide-react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {theme} from '../../theme';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
-import {getProjectDeliverables, getProjectSeries} from '../../lib/api';
-import {Deliverable, Series} from '../../lib/types';
+import {getSeriesItems, createSeriesShareLink} from '../../lib/api';
+import {Deliverable} from '../../lib/types';
 import {ReviewStackParamList} from '../../app/App';
 
-type RouteParams = RouteProp<ReviewStackParamList, 'ProjectDeliverables'>;
+type RouteParams = RouteProp<ReviewStackParamList, 'SeriesItems'>;
 type NavigationProp = StackNavigationProp<ReviewStackParamList>;
 
-const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
-const HERO_HEIGHT = SCREEN_HEIGHT * 0.5;
+const {height: SCREEN_HEIGHT} = Dimensions.get('window');
+const HERO_HEIGHT = SCREEN_HEIGHT * 0.4;
 const CARD_HEIGHT = 200;
 
 interface DeliverableCardProps {
@@ -33,9 +35,12 @@ interface DeliverableCardProps {
   onPress: () => void;
 }
 
-function VerticalDeliverableCard({deliverable, onPress}: DeliverableCardProps) {
+function SeriesItemCard({deliverable, onPress}: DeliverableCardProps) {
   const hasUnreadComments =
     deliverable.unread_comment_count != null && deliverable.unread_comment_count > 0;
+
+  const statusLabel = deliverable.status === 'final' ? 'FINAL' : deliverable.status.toUpperCase();
+  const isFinal = deliverable.status === 'final';
 
   return (
     <TouchableOpacity
@@ -77,70 +82,78 @@ function VerticalDeliverableCard({deliverable, onPress}: DeliverableCardProps) {
         </View>
       )}
       
-      {/* Title - bottom (version/final already shown top-left) */}
+      {/* Title and status - bottom */}
       <View style={styles.cardContent}>
         <Text style={styles.cardName} numberOfLines={1}>
           {deliverable.name}
         </Text>
+        <View style={[styles.cardStatusBadge, isFinal && styles.cardStatusFinal]}>
+          <Text style={[styles.cardStatusText, isFinal && styles.cardStatusTextFinal]}>
+            {statusLabel}
+          </Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
 }
 
-export function ProjectDeliverablesScreen() {
+export function SeriesItemsScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteParams>();
-  const {projectId, projectName, clientName, thumbnailUrl} = route.params;
+  const {seriesId, seriesName, seriesDescription, thumbnailUrl, itemCount} = route.params;
   
-  const [deliverables, setDeliverables] = useState<Deliverable[]>([]);
-  const [series, setSeries] = useState<Series[]>([]);
+  const [items, setItems] = useState<Deliverable[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
 
   // Scroll animation for blur effect
   const scrollY = useRef(new Animated.Value(0)).current;
 
-  const loadData = useCallback(async () => {
+  const loadItems = useCallback(async () => {
     try {
-      const [deliverablesData, seriesData] = await Promise.all([
-        getProjectDeliverables(projectId),
-        getProjectSeries(projectId),
-      ]);
-      setDeliverables(deliverablesData);
-      setSeries(seriesData);
+      const data = await getSeriesItems(seriesId);
+      setItems(data);
     } catch (err) {
-      console.error('Error loading project data:', err);
+      console.error('Error loading series items:', err);
     }
-  }, [projectId]);
+  }, [seriesId]);
 
   useEffect(() => {
     const init = async () => {
       setIsLoading(true);
-      await loadData();
+      await loadItems();
       setIsLoading(false);
     };
     init();
-  }, [loadData]);
+  }, [loadItems]);
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    await loadData();
+    await loadItems();
     setIsRefreshing(false);
-  }, [loadData]);
+  }, [loadItems]);
 
-  const handleDeliverablePress = (deliverable: Deliverable) => {
+  const handleItemPress = (deliverable: Deliverable) => {
     navigation.navigate('DeliverableReview', {deliverableId: deliverable.id});
   };
 
-  const handleSeriesPress = (s: Series) => {
-    navigation.navigate('SeriesItems', {
-      seriesId: s.id,
-      seriesName: s.name,
-      seriesDescription: s.description,
-      thumbnailUrl: s.thumbnail,
-      itemCount: s.item_count,
-    });
-  };
+  const handleShare = useCallback(async () => {
+    setIsSharing(true);
+    try {
+      const result = await createSeriesShareLink({seriesId});
+      
+      // Show share sheet
+      await Share.share({
+        message: result.url,
+        title: `Review: ${seriesName}`,
+      });
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to create share link');
+    } finally {
+      setIsSharing(false);
+    }
+  }, [seriesId, seriesName]);
 
   // Animated values for parallax and blur effect
   const imageScale = scrollY.interpolate({
@@ -176,15 +189,15 @@ export function ProjectDeliverablesScreen() {
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
       <Film size={40} color={theme.colors.textMuted} />
-      <Text style={styles.emptyTitle}>NO DELIVERABLES</Text>
+      <Text style={styles.emptyTitle}>NO ITEMS</Text>
       <Text style={styles.emptySubtitle}>
-        Deliverables for this project will appear here
+        Items in this series will appear here
       </Text>
     </View>
   );
 
   if (isLoading) {
-    return <BrandedLoadingScreen message="Loading deliverables..." />;
+    return <BrandedLoadingScreen message="Loading series..." />;
   }
 
   return (
@@ -193,7 +206,6 @@ export function ProjectDeliverablesScreen() {
       <View style={styles.heroSection}>
         {thumbnailUrl ? (
           <>
-            {/* Main image with parallax */}
             <Animated.Image
               source={{uri: thumbnailUrl}}
               style={[
@@ -208,7 +220,6 @@ export function ProjectDeliverablesScreen() {
               resizeMode="cover"
               blurRadius={0}
             />
-            {/* Blur overlay that increases on scroll */}
             <Animated.View
               style={[
                 styles.blurOverlay,
@@ -232,7 +243,7 @@ export function ProjectDeliverablesScreen() {
           </>
         ) : (
           <View style={styles.heroNoImage}>
-            <Folder size={64} color={theme.colors.textMuted} />
+            <Film size={64} color={theme.colors.textMuted} />
           </View>
         )}
         
@@ -252,22 +263,36 @@ export function ProjectDeliverablesScreen() {
               transform: [{translateY: titleTranslateY}],
             },
           ]}>
-          <Text style={styles.projectTitle} numberOfLines={2}>{projectName}</Text>
-          {clientName && (
-            <Text style={styles.clientName}>{clientName.toUpperCase()}</Text>
-          )}
+          <Text style={styles.seriesLabel}>SERIES</Text>
+          <Text style={styles.seriesTitle} numberOfLines={2}>{seriesName}</Text>
+          {seriesDescription ? (
+            <Text style={styles.seriesDescription} numberOfLines={2}>{seriesDescription}</Text>
+          ) : null}
           <View style={styles.decorativeLine} />
         </Animated.View>
-
       </View>
 
-      {/* Back button - outside heroSection to ensure it's clickable */}
+      {/* Back button and share button */}
       <View style={styles.floatingHeader} pointerEvents="box-none">
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
           activeOpacity={0.7}>
           <ChevronLeft size={20} color={theme.colors.textPrimary} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.floatingShare} pointerEvents="box-none">
+        <TouchableOpacity
+          style={styles.shareButton}
+          onPress={handleShare}
+          disabled={isSharing}
+          activeOpacity={0.7}>
+          {isSharing ? (
+            <ActivityIndicator size="small" color={theme.colors.textPrimary} />
+          ) : (
+            <Share2 size={18} color={theme.colors.textPrimary} />
+          )}
         </TouchableOpacity>
       </View>
 
@@ -278,7 +303,7 @@ export function ProjectDeliverablesScreen() {
         showsVerticalScrollIndicator={false}
         onScroll={Animated.event(
           [{nativeEvent: {contentOffset: {y: scrollY}}}],
-          {useNativeDriver: true}
+          {useNativeDriver: true},
         )}
         scrollEventThrottle={16}
         refreshControl={
@@ -291,65 +316,20 @@ export function ProjectDeliverablesScreen() {
         {/* Spacer for hero */}
         <View style={styles.heroSpacer} />
 
-        {/* Series section */}
-        {series.length > 0 && (
-          <View style={styles.seriesSection}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionLabel}>SERIES</Text>
-              <Text style={styles.deliverableCount}>{series.length}</Text>
-            </View>
-            <View style={styles.seriesList}>
-              {series.map((s) => (
-                <TouchableOpacity
-                  key={s.id}
-                  style={styles.seriesCard}
-                  onPress={() => handleSeriesPress(s)}
-                  activeOpacity={0.85}>
-                  {s.thumbnail ? (
-                    <Image
-                      source={{uri: s.thumbnail}}
-                      style={styles.seriesCardImage}
-                      resizeMode="cover"
-                    />
-                  ) : (
-                    <View style={styles.seriesCardPlaceholder}>
-                      <Film size={28} color="rgba(255,255,255,0.15)" />
-                    </View>
-                  )}
-                  <LinearGradient
-                    colors={['rgba(0,0,0,0.8)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.2)', 'transparent']}
-                    start={{x: 0, y: 0.5}}
-                    end={{x: 1, y: 0.5}}
-                    style={styles.seriesCardGradient}
-                  />
-                  <View style={styles.seriesCardContent}>
-                    <Text style={styles.seriesCardName} numberOfLines={1}>
-                      {s.name}
-                    </Text>
-                    <Text style={styles.seriesCardCount}>
-                      {s.item_count} {s.item_count === 1 ? 'ITEM' : 'ITEMS'}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* Deliverables section */}
-        <View style={styles.deliverablesSection}>
+        {/* Items section */}
+        <View style={styles.itemsSection}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionLabel}>DELIVERABLES</Text>
-            <Text style={styles.deliverableCount}>{deliverables.length}</Text>
+            <Text style={styles.sectionLabel}>ITEMS</Text>
+            <Text style={styles.itemCount}>{items.length}</Text>
           </View>
 
-          {deliverables.length > 0 ? (
+          {items.length > 0 ? (
             <View style={styles.cardList}>
-              {deliverables.map((item) => (
-                <VerticalDeliverableCard
+              {items.map((item) => (
+                <SeriesItemCard
                   key={item.id}
                   deliverable={item}
-                  onPress={() => handleDeliverablePress(item)}
+                  onPress={() => handleItemPress(item)}
                 />
               ))}
             </View>
@@ -373,7 +353,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
   },
-  // Hero section - fixed at top
+  // Hero section
   heroSection: {
     position: 'absolute',
     top: 0,
@@ -412,7 +392,14 @@ const styles = StyleSheet.create({
     top: 60,
     left: theme.spacing.md,
     zIndex: 1000,
-    elevation: 10, // Android
+    elevation: 10,
+  },
+  floatingShare: {
+    position: 'absolute',
+    top: 60,
+    right: theme.spacing.md,
+    zIndex: 1000,
+    elevation: 10,
   },
   backButton: {
     width: 44,
@@ -421,7 +408,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'transparent',
   },
-  projectTitle: {
+  shareButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  seriesLabel: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 11,
+    fontFamily: theme.typography.fontFamily.semibold,
+    letterSpacing: 3,
+    marginBottom: theme.spacing.xs,
+    textShadowColor: 'rgba(0,0,0,0.9)',
+    textShadowOffset: {width: 0, height: 1},
+    textShadowRadius: 6,
+  },
+  seriesTitle: {
     color: theme.colors.textPrimary,
     fontSize: 34,
     fontFamily: theme.typography.fontFamily.bold,
@@ -431,11 +435,11 @@ const styles = StyleSheet.create({
     textShadowOffset: {width: 0, height: 2},
     textShadowRadius: 10,
   },
-  clientName: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 12,
-    fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 3,
+  seriesDescription: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 13,
+    fontFamily: theme.typography.fontFamily.regular,
+    textAlign: 'center',
     marginTop: theme.spacing.sm,
     textShadowColor: 'rgba(0,0,0,0.9)',
     textShadowOffset: {width: 0, height: 1},
@@ -447,62 +451,12 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.textPrimary,
     marginTop: theme.spacing.lg,
   },
-  // Spacer to push content below hero
+  // Spacer
   heroSpacer: {
     height: HERO_HEIGHT - 40,
   },
-  // Series section
-  seriesSection: {
-    backgroundColor: theme.colors.background,
-    paddingTop: theme.spacing.lg,
-    paddingBottom: theme.spacing.md,
-  },
-  seriesList: {
-    paddingHorizontal: theme.spacing.md,
-    gap: theme.spacing.sm,
-  },
-  seriesCard: {
-    width: '100%',
-    height: 72,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    position: 'relative',
-  },
-  seriesCardImage: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  seriesCardPlaceholder: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: theme.colors.surfaceElevated,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  seriesCardGradient: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  seriesCardContent: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    paddingHorizontal: theme.spacing.md,
-  },
-  seriesCardName: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontFamily: theme.typography.fontFamily.semibold,
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: {width: 0, height: 1},
-    textShadowRadius: 3,
-  },
-  seriesCardCount: {
-    color: 'rgba(255, 255, 255, 0.5)',
-    fontSize: 10,
-    fontFamily: theme.typography.fontFamily.medium,
-    letterSpacing: 1.5,
-    marginTop: 4,
-  },
-  // Deliverables section
-  deliverablesSection: {
+  // Items section
+  itemsSection: {
     backgroundColor: theme.colors.background,
     paddingTop: theme.spacing.lg,
     paddingBottom: 100,
@@ -521,16 +475,16 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily.semibold,
     letterSpacing: 1.5,
   },
-  deliverableCount: {
+  itemCount: {
     color: theme.colors.textDisabled,
     fontSize: 11,
   },
-  // Vertical card list
+  // Card list
   cardList: {
     paddingHorizontal: theme.spacing.md,
     gap: theme.spacing.md,
   },
-  // Card styles
+  // Card styles (matching ProjectDeliverableCard)
   card: {
     width: '100%',
     height: CARD_HEIGHT,
@@ -595,9 +549,31 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: 18,
     fontFamily: theme.typography.fontFamily.semibold,
+    marginBottom: 8,
     textShadowColor: 'rgba(0,0,0,0.5)',
     textShadowOffset: {width: 0, height: 1},
     textShadowRadius: 3,
+  },
+  cardStatusBadge: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  cardStatusFinal: {
+    borderColor: theme.colors.success,
+    backgroundColor: 'rgba(74, 222, 128, 0.2)',
+  },
+  cardStatusText: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 10,
+    fontFamily: theme.typography.fontFamily.bold,
+    letterSpacing: 1,
+  },
+  cardStatusTextFinal: {
+    color: theme.colors.success,
   },
   // Loading & Empty states
   loadingContainer: {

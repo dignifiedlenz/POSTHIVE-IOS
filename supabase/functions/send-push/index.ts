@@ -88,6 +88,20 @@ function shouldSendNotification(
   return true
 }
 
+// Build a collapse ID from notification data so APNs deduplicates on the device.
+// If multiple workspace members share a device, only 1 notification per event shows.
+function buildCollapseId(notificationType?: string, data?: Record<string, unknown>): string | null {
+  if (!notificationType || !data) return null
+  
+  if (data.version_id) return `${notificationType}_${data.version_id}`
+  if (data.comment_id) return `${notificationType}_${data.comment_id}`
+  if (data.todo_id) return `${notificationType}_${data.todo_id}`
+  if (data.deliverable_id) return `${notificationType}_${data.deliverable_id}`
+  if (data.transfer_session_id) return `${notificationType}_${data.transfer_session_id}`
+  
+  return null
+}
+
 // Send push notification to a single device
 async function sendToDevice(
   token: string, 
@@ -109,19 +123,29 @@ async function sendToDevice(
     type: payload.notificationType,
   }
 
+  const collapseId = buildCollapseId(payload.notificationType, payload.data)
+
+  const headers: Record<string, string> = {
+    'authorization': `bearer ${apnsToken}`,
+    'apns-topic': APNS_BUNDLE_ID,
+    'apns-push-type': 'alert',
+    'apns-priority': '10',
+    'apns-expiration': '0',
+    'content-type': 'application/json',
+  }
+
+  // Collapse ID tells APNs to replace older notifications with the same ID on the device.
+  // Prevents N banners when N workspace members share a device.
+  if (collapseId) {
+    headers['apns-collapse-id'] = collapseId.substring(0, 64) // APNs limit: 64 bytes
+  }
+
   try {
     const response = await fetch(
       `https://${APNS_HOST}/3/device/${token}`,
       {
         method: 'POST',
-        headers: {
-          'authorization': `bearer ${apnsToken}`,
-          'apns-topic': APNS_BUNDLE_ID,
-          'apns-push-type': 'alert',
-          'apns-priority': '10',
-          'apns-expiration': '0',
-          'content-type': 'application/json',
-        },
+        headers,
         body: JSON.stringify(apnsPayload),
       }
     )

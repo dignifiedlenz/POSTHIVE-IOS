@@ -108,6 +108,7 @@ export interface Deliverable {
   updated_at: string;
   current_version?: number;
   unread_comment_count?: number;
+  comment_count?: number;
   latest_version?: Version;
 }
 
@@ -125,6 +126,9 @@ export interface Version {
   bunny_stream_video_id?: string;
   bunny_thumbnail_url?: string;
   processing_status?: string;
+  // Storage URLs for downloads (original files)
+  storage_url?: string;
+  r2_url?: string;
 }
 
 // ===== COMMENTS =====
@@ -266,6 +270,19 @@ export interface CalendarEvent {
   created_by: string | null;
   project_id: string | null;
   visibility?: 'workspace' | 'private';
+}
+
+// ===== SERIES =====
+export interface Series {
+  id: string;
+  project_id: string;
+  name: string;
+  description?: string;
+  thumbnail?: string;
+  created_at: string;
+  updated_at?: string;
+  created_by: string;
+  item_count: number;
 }
 
 // ===== WORKSPACE MEMBERS =====

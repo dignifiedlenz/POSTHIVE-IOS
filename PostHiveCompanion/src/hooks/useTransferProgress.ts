@@ -7,7 +7,6 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { useLiveActivity } from './useLiveActivity';
 
 export interface TransferSession {
   id: string;

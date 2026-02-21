@@ -223,11 +223,11 @@ class WidgetModule: NSObject {
             print("WidgetModule: Original image size: \(originalSize.width)x\(originalSize.height)")
             
             // Calculate max dimensions for widget (iOS widgets have strict size limits)
-            // Max area is typically ~2.5MB but can be lower, so we'll be conservative
-            // Target: max 600px width, 400px height = 240,000 pixels (well under limit)
-            let maxWidth: CGFloat = 600
-            let maxHeight: CGFloat = 400
-            let maxArea: CGFloat = maxWidth * maxHeight // 240,000 pixels (safe limit)
+            // Small/medium widgets display at ~158–329pt; at 3x that's ~474–987px.
+            // Target 320×240 keeps file small and is plenty for widget display.
+            let maxWidth: CGFloat = 320
+            let maxHeight: CGFloat = 240
+            let maxArea: CGFloat = maxWidth * maxHeight
             
             let scale: CGFloat
             if originalSize.width * originalSize.height > maxArea {

@@ -1,0 +1,5 @@
+# Edge Function config for process-push-queue
+# Required: pg_net invokes this from DB triggers without Authorization header.
+# Disabling JWT verification allows those requests to succeed.
+[functions.process-push-queue]
+verify_jwt = false

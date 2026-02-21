@@ -17,6 +17,7 @@ import {Film, MessageCircle, ChevronRight} from 'lucide-react-native';
 import {formatDistanceToNow} from 'date-fns';
 import LinearGradient from 'react-native-linear-gradient';
 import {theme} from '../../theme';
+import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useAuth} from '../../hooks/useAuth';
 import {useDeliverables} from '../../hooks/useDeliverables';
 import {Deliverable} from '../../lib/types';
@@ -129,13 +130,7 @@ export function DeliverablesScreen() {
   );
 
   if (isLoading) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.textPrimary} />
-        </View>
-      </SafeAreaView>
-    );
+    return <BrandedLoadingScreen message="Loading deliverables..." />;
   }
 
   return (

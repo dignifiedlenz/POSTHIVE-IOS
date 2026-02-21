@@ -13,9 +13,10 @@ import {
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
 import {StackNavigationProp} from '@react-navigation/stack';
-import {Folder, Archive} from 'lucide-react-native';
+import {Folder, Archive, Film} from 'lucide-react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {theme} from '../../theme';
+import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useAuth} from '../../hooks/useAuth';
 import {getProjects} from '../../lib/api';
 import {Project} from '../../lib/types';
@@ -125,13 +126,7 @@ export function ProjectsScreen() {
   };
 
   if (isLoading) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.textPrimary} />
-        </View>
-      </SafeAreaView>
-    );
+    return <BrandedLoadingScreen message="Loading projects..." />;
   }
 
   const renderArchivedSection = () => {
@@ -158,10 +153,19 @@ export function ProjectsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Section header with count */}
+      {/* Section header with count and Series link */}
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionLabel}>PROJECTS</Text>
-        <Text style={styles.sectionCount}>{projects.length}</Text>
+        <View style={styles.headerRight}>
+          <Text style={styles.sectionCount}>{projects.length}</Text>
+          <TouchableOpacity
+            style={styles.seriesLink}
+            onPress={() => navigation.navigate('SeriesList')}
+            hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+            <Film size={14} color={theme.colors.textMuted} />
+            <Text style={styles.seriesLinkText}>SERIES</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList
@@ -217,9 +221,27 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily.semibold,
     letterSpacing: 2,
   },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.md,
+  },
   sectionCount: {
     color: theme.colors.textDisabled,
     fontSize: 11,
+  },
+  seriesLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  seriesLinkText: {
+    color: theme.colors.textMuted,
+    fontSize: 10,
+    fontFamily: theme.typography.fontFamily.semibold,
+    letterSpacing: 1.5,
   },
   loadingContainer: {
     flex: 1,

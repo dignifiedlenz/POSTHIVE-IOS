@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>PostHiveCompanion</string>
+	<string>POSTHIVE</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -33,10 +33,6 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>PostHive needs full access to your calendar to create, edit, and sync events between PostHive and your Apple Calendar.</string>
-	<key>NSCalendarsUsageDescription</key>
-	<string>PostHive needs access to your calendar to display and sync events with your Apple Calendar.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>PostHive uses Face ID to securely authenticate and sign you in.</string>
 	<key>NSMicrophoneUsageDescription</key>
@@ -52,6 +48,7 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
+		<string>fetch</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

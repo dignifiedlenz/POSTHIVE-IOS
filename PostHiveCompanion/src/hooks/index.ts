@@ -4,6 +4,7 @@ export {useNotifications} from './useNotifications';
 export {useTodos} from './useTodos';
 export {useDeliverables, useDeliverableDetail} from './useDeliverables';
 export {usePushNotifications, setupBackgroundHandler} from './usePushNotifications';
+export {setupBackgroundRefresh} from './useBackgroundRefresh';
 export type {NotificationPreferences} from './usePushNotifications';
 export {
   useCalendarDayData,
@@ -20,4 +21,3 @@ export {
 export type {ScheduledTask, BlockedTime} from './useCalendarDayData';
 export {useOrientation} from './useOrientation';
 export type {Orientation} from './useOrientation';
-export {useLiveActivity} from './useLiveActivity';

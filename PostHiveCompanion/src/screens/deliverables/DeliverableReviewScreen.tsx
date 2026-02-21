@@ -18,13 +18,17 @@ import {
   Dimensions,
 } from 'react-native';
 import {Comment} from '../../lib/types';
-import {SafeAreaView} from 'react-native-safe-area-context';
+import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useNavigation, useRoute, RouteProp, useFocusEffect} from '@react-navigation/native';
-import {Send, Clock, Share, Copy, Lock, X, Check, Download, CheckCircle, Circle} from 'lucide-react-native';
+import {Send, Clock, Share, Copy, Lock, X, Check, Download, CheckCircle, Circle, FileVideo, FileImage} from 'lucide-react-native';
 import {theme} from '../../theme';
 import {useAuth} from '../../hooks/useAuth';
 import {useDeliverableDetail} from '../../hooks/useDeliverables';
 import {VideoPlayer, VideoPlayerRef} from '../../components/VideoPlayer';
+import {
+  AudioPlayerWithWaveform,
+  AudioPlayerWithWaveformRef,
+} from '../../components/AudioPlayerWithWaveform';
 import {CommentItem} from '../../components/CommentItem';
 import {ReviewStackParamList} from '../../app/App';
 import {formatVideoTimestamp} from '../../lib/utils';
@@ -32,7 +36,38 @@ import {createClientReviewShareLink, getDeliverableGalleryImages, markDeliverabl
 import {CameraRoll} from '@react-native-camera-roll/camera-roll';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import {PhotoGallery, Photo, PhotoGrid} from '../../components/PhotoGallery';
+import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useTabBar} from '../../contexts/TabBarContext';
+
+// Supported file extensions for Camera Roll
+const SUPPORTED_VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'mp4v', '3gp'];
+const SUPPORTED_PHOTO_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'heic', 'heif', 'tiff', 'tif', 'bmp'];
+
+function getFileExtension(url: string): string {
+  const urlPath = url.split('?')[0];
+  return urlPath.split('.').pop()?.toLowerCase() || '';
+}
+
+function isSupportedForCameraRoll(url: string, deliverableType: string): {supported: boolean; mediaType: 'photo' | 'video'} {
+  const extension = getFileExtension(url);
+  
+  if (SUPPORTED_VIDEO_EXTENSIONS.includes(extension)) {
+    return {supported: true, mediaType: 'video'};
+  }
+  if (SUPPORTED_PHOTO_EXTENSIONS.includes(extension)) {
+    return {supported: true, mediaType: 'photo'};
+  }
+  
+  // Fallback to deliverable type if extension not recognized
+  if (deliverableType === 'video') {
+    return {supported: true, mediaType: 'video'};
+  }
+  if (deliverableType === 'image') {
+    return {supported: true, mediaType: 'photo'};
+  }
+  
+  return {supported: false, mediaType: 'video'};
+}
 
 type RouteParams = RouteProp<ReviewStackParamList, 'DeliverableReview'>;
 
@@ -43,6 +78,7 @@ export function DeliverableReviewScreen() {
   const {user} = useAuth();
 
   const videoRef = useRef<VideoPlayerRef>(null);
+  const audioRef = useRef<AudioPlayerWithWaveformRef>(null);
   const commentsListRef = useRef<FlatList<Comment>>(null);
   const [commentText, setCommentText] = useState('');
   const [currentVideoTime, setCurrentVideoTime] = useState(0);
@@ -71,8 +107,12 @@ export function DeliverableReviewScreen() {
   // Action menu state
   const [showActionMenu, setShowActionMenu] = useState(false);
   
+  // Comment popup (from video overlay trigger)
+  const [showCommentPopup, setShowCommentPopup] = useState(false);
+  
   // Tab bar visibility control
   const {showTabBar, hideTabBar} = useTabBar();
+  const insets = useSafeAreaInsets();
 
   // Handle video fullscreen changes - just track state, tab bar stays hidden on this screen
   const handleFullscreenChange = useCallback((fullscreen: boolean) => {
@@ -190,9 +230,10 @@ export function DeliverableReviewScreen() {
   }, []);
 
   const handleTimestampPress = useCallback((timestamp: number) => {
-    videoRef.current?.seekTo(timestamp);
-    videoRef.current?.play();
-  }, []);
+    const mediaRef = deliverable?.type === 'audio' ? audioRef : videoRef;
+    mediaRef.current?.seekTo(timestamp);
+    mediaRef.current?.play();
+  }, [deliverable?.type]);
 
   const handleSubmitComment = useCallback(async () => {
     if (!commentText.trim()) return;
@@ -249,10 +290,11 @@ export function DeliverableReviewScreen() {
       const mention = `@${comment.author?.name || 'User'} `;
       setCommentText(mention);
       if (comment.start_time != null) {
-        videoRef.current?.seekTo(comment.start_time);
+        const mediaRef = deliverable?.type === 'audio' ? audioRef : videoRef;
+        mediaRef.current?.seekTo(comment.start_time);
       }
     },
-    [],
+    [deliverable?.type],
   );
 
   const addTimestamp = useCallback(() => {
@@ -319,86 +361,254 @@ export function DeliverableReviewScreen() {
     setIsCreatingShare(false);
   }, []);
 
+  // File size state
+  const [downloadSize, setDownloadSize] = useState<number | null>(null);
+  const [isFetchingSize, setIsFetchingSize] = useState(false);
+  
+  // Download progress modal state
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadedBytes, setDownloadedBytes] = useState(0);
+  const [downloadStatus, setDownloadStatus] = useState<'downloading' | 'saving' | 'success' | 'error'>('downloading');
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const downloadProgressAnim = useRef(new Animated.Value(0)).current;
+  const successScaleAnim = useRef(new Animated.Value(0)).current;
+
+  // Get downloadable URL - prefer storage URLs (actual files) over streaming URLs
+  const getDownloadableUrl = useCallback(() => {
+    // Priority: storage_url (B2) > r2_url (Cloudflare R2) > bunny_cdn_url > file_url
+    // storage_url and r2_url are the actual video files
+    // bunny_cdn_url and file_url might be HLS streaming URLs
+    
+    // First try storage URLs (these are the actual files)
+    if (currentVersion?.storage_url) {
+      return currentVersion.storage_url;
+    }
+    if (currentVersion?.r2_url) {
+      return currentVersion.r2_url;
+    }
+    
+    // Fall back to CDN/file URLs only if they're not HLS
+    const fallbackUrl = currentVersion?.bunny_cdn_url || currentVersion?.file_url;
+    if (fallbackUrl && !fallbackUrl.includes('.m3u8') && !fallbackUrl.includes('playlist')) {
+      return fallbackUrl;
+    }
+    
+    return null;
+  }, [currentVersion?.storage_url, currentVersion?.r2_url, currentVersion?.bunny_cdn_url, currentVersion?.file_url]);
+
+  // Fetch file size when version changes
+  useEffect(() => {
+    const fetchFileSize = async () => {
+      const url = getDownloadableUrl();
+      if (!url) {
+        setDownloadSize(null);
+        return;
+      }
+      
+      setIsFetchingSize(true);
+      try {
+        const response = await fetch(url, {method: 'HEAD'});
+        const contentLength = response.headers.get('content-length');
+        if (contentLength) {
+          setDownloadSize(parseInt(contentLength, 10));
+        } else {
+          setDownloadSize(null);
+        }
+      } catch (error) {
+        console.log('Could not fetch file size:', error);
+        setDownloadSize(null);
+      } finally {
+        setIsFetchingSize(false);
+      }
+    };
+    
+    fetchFileSize();
+  }, [getDownloadableUrl]);
+
+  // Format file size for display
+  const formatFileSize = useCallback((bytes: number | null): string => {
+    if (bytes === null) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }, []);
+
+  // Check if current file can be saved to camera roll
+  const canSaveToCameraRoll = useCallback(() => {
+    const url = getDownloadableUrl();
+    if (!url) return false;
+    const deliverableType = deliverable?.type || 'video';
+    const {supported} = isSupportedForCameraRoll(url, deliverableType);
+    return supported;
+  }, [getDownloadableUrl, deliverable?.type]);
+
+  // Get the appropriate button text with size
+  const getDownloadButtonText = useCallback(() => {
+    if (isDownloading) return 'Saving...';
+    if (!getDownloadableUrl()) return 'Stream Only';
+    
+    const sizeText = downloadSize ? ` (${formatFileSize(downloadSize)})` : '';
+    const actionText = canSaveToCameraRoll() ? 'Save to Camera Roll' : 'Save to Files';
+    return `${actionText}${sizeText}`;
+  }, [isDownloading, canSaveToCameraRoll, getDownloadableUrl, downloadSize, formatFileSize]);
+
+  // Reset download modal
+  const resetDownloadModal = useCallback(() => {
+    setShowDownloadModal(false);
+    setDownloadProgress(0);
+    setDownloadedBytes(0);
+    setDownloadStatus('downloading');
+    setDownloadError(null);
+    downloadProgressAnim.setValue(0);
+    successScaleAnim.setValue(0);
+  }, [downloadProgressAnim, successScaleAnim]);
+
+  // Animate success
+  const animateSuccess = useCallback(() => {
+    Animated.sequence([
+      Animated.timing(downloadProgressAnim, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: false,
+      }),
+      Animated.spring(successScaleAnim, {
+        toValue: 1,
+        tension: 50,
+        friction: 7,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [downloadProgressAnim, successScaleAnim]);
+
   // Download functionality
   const handleDownload = useCallback(async () => {
-    if (!currentVersion?.file_url || isDownloading) return;
+    const downloadableUrl = getDownloadableUrl();
+    
+    if (!downloadableUrl) {
+      Alert.alert(
+        'Cannot Download',
+        'This video is only available for streaming and cannot be downloaded directly.',
+      );
+      return;
+    }
+    
+    if (isDownloading) return;
 
+    // Reset and show modal
+    resetDownloadModal();
+    setShowDownloadModal(true);
     setIsDownloading(true);
+    
     let tempFilePath: string | null = null;
     
     try {
-      const fileUrl = currentVersion.file_url;
+      const fileUrl = downloadableUrl;
       const deliverableName = deliverable?.name || 'deliverable';
-      const versionNumber = currentVersion.version_number === 100 
+      const versionNumber = currentVersion?.version_number === 100 
         ? 'Final' 
-        : `V${currentVersion.version_number}`;
+        : `V${currentVersion?.version_number || 1}`;
       
-      // Determine media type from deliverable type
+      // Determine media type and if camera roll is supported
       const deliverableType = deliverable?.type || 'video';
-      const mediaType = deliverableType === 'image' ? 'photo' : 'video';
+      const {supported: canUseCameraRoll, mediaType} = isSupportedForCameraRoll(fileUrl, deliverableType);
       
-      // Extract file extension from URL or default based on type
-      const urlPath = fileUrl.split('?')[0];
-      const urlExtension = urlPath.split('.').pop()?.toLowerCase();
-      let extension: string;
+      // Extract file extension from URL
+      const extension = getFileExtension(fileUrl) || (mediaType === 'video' ? 'mp4' : 'jpg');
       
-      if (mediaType === 'video') {
-        extension = ['mp4', 'mov', 'avi', 'm4v', 'webm'].includes(urlExtension || '') 
-          ? urlExtension! 
-          : 'mp4';
-      } else {
-        extension = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'].includes(urlExtension || '') 
-          ? urlExtension! 
-          : 'jpg';
-      }
-      
-      // Download the file to a temporary location first
-      const fileName = `posthive_${mediaType}_${Date.now()}.${extension}`;
+      const sanitizedName = deliverableName.replace(/[^a-zA-Z0-9-_]/g, '_');
+      const fileName = `PostHive_${sanitizedName}_${versionNumber}.${extension}`;
       tempFilePath = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/${fileName}`;
       
-      console.log('Downloading file to:', tempFilePath);
-      
+      // Download with progress tracking
       const response = await ReactNativeBlobUtil.config({
         fileCache: true,
         path: tempFilePath,
-      }).fetch('GET', fileUrl);
+        followRedirect: true,
+      })
+        .fetch('GET', fileUrl)
+        .progress({interval: 100}, (received, total) => {
+          const progress = total > 0 ? received / total : 0;
+          setDownloadProgress(progress);
+          setDownloadedBytes(received);
+          
+          // Animate progress bar
+          Animated.timing(downloadProgressAnim, {
+            toValue: progress,
+            duration: 100,
+            useNativeDriver: false,
+          }).start();
+        });
+      
+      const status = response.info().status;
+      
+      if (status !== 200) {
+        throw new Error(`Download failed with status ${status}`);
+      }
       
       const downloadedPath = response.path();
-      console.log('Downloaded to:', downloadedPath);
       
-      // Save the downloaded file to camera roll
-      await CameraRoll.save(`file://${downloadedPath}`, {
-        type: mediaType,
-        album: 'PostHive',
-      });
+      // Update status to saving
+      setDownloadStatus('saving');
+      
+      if (canUseCameraRoll) {
+        // Save the downloaded file to camera roll
+        try {
+          await CameraRoll.save(`file://${downloadedPath}`, {
+            type: mediaType,
+            album: 'PostHive',
+          });
 
-      Alert.alert(
-        'Downloaded',
-        `${deliverableName} ${versionNumber} has been saved to your photo library.`,
-        [{text: 'OK'}],
-      );
-      
-      // Clean up temp file
-      try {
-        await ReactNativeBlobUtil.fs.unlink(downloadedPath);
-      } catch (cleanupError) {
-        console.log('Cleanup error (non-critical):', cleanupError);
+          // Show success
+          setDownloadStatus('success');
+          animateSuccess();
+          
+          // Auto-close after delay
+          setTimeout(() => {
+            resetDownloadModal();
+          }, 2500);
+        } catch (cameraRollError: any) {
+          // If camera roll fails (e.g., unsupported format), fall back to share sheet
+          console.log('Camera Roll save failed, falling back to share sheet:', cameraRollError);
+          
+          if (cameraRollError?.message?.includes('3302') || cameraRollError?.code === 3302) {
+            resetDownloadModal();
+            await RNShare.share({
+              url: `file://${downloadedPath}`,
+              title: fileName,
+            });
+          } else {
+            throw cameraRollError;
+          }
+        }
+      } else {
+        // For unsupported formats, use the share sheet
+        resetDownloadModal();
+        await RNShare.share({
+          url: `file://${downloadedPath}`,
+          title: fileName,
+        });
       }
+      
+      // Clean up temp file after a delay
+      setTimeout(async () => {
+        try {
+          await ReactNativeBlobUtil.fs.unlink(downloadedPath);
+        } catch (cleanupError) {
+          console.log('Cleanup error (non-critical):', cleanupError);
+        }
+      }, 5000);
     } catch (error) {
       console.error('Download error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Failed to download file';
       
-      // Check if it's a permission error
-      if (errorMessage.includes('permission') || errorMessage.includes('Permission')) {
-        Alert.alert(
-          'Permission Required',
-          'Please grant photo library access in Settings to save files.',
-        );
+      if (errorMessage.includes('cancelled') || errorMessage.includes('canceled')) {
+        // User cancelled - just close modal
+        resetDownloadModal();
       } else {
-        Alert.alert(
-          'Download Failed',
-          errorMessage || 'Failed to download file. Please try again.',
-        );
+        setDownloadStatus('error');
+        setDownloadError(errorMessage);
       }
       
       // Clean up temp file on error
@@ -412,7 +622,7 @@ export function DeliverableReviewScreen() {
     } finally {
       setIsDownloading(false);
     }
-  }, [currentVersion, deliverable, isDownloading]);
+  }, [currentVersion, deliverable, isDownloading, getDownloadableUrl, resetDownloadModal, animateSuccess, downloadProgressAnim]);
 
   // Finalization functionality
   const isFinalVersion = currentVersion?.version_number === 100 || deliverable?.current_version === 100;
@@ -501,15 +711,16 @@ export function DeliverableReviewScreen() {
             animated: true,
             viewPosition: 0.3, // Position in upper third of visible area
           });
-          // Also seek video to comment timestamp if available
+          // Also seek media to comment timestamp if available
           const comment = comments[commentIndex];
           if (comment.start_time != null) {
-            videoRef.current?.seekTo(comment.start_time);
+            const mediaRef = deliverable?.type === 'audio' ? audioRef : videoRef;
+            mediaRef.current?.seekTo(comment.start_time);
           }
         }, 300);
       }
     }
-  }, [isLoading, commentId, comments]);
+  }, [isLoading, commentId, comments, deliverable?.type]);
 
   // Clear highlight after animation
   useEffect(() => {
@@ -531,13 +742,7 @@ export function DeliverableReviewScreen() {
   }, []);
 
   if (isLoading) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.accent} />
-        </View>
-      </SafeAreaView>
-    );
+    return <BrandedLoadingScreen />;
   }
 
   const videoUrl = currentVersion?.file_url || '';
@@ -597,6 +802,83 @@ export function DeliverableReviewScreen() {
               )}
             </View>
           </View>
+        ) : deliverable?.type === 'audio' ? (
+          <AudioPlayerWithWaveform
+            ref={audioRef}
+            source={videoUrl}
+            onTimeUpdate={handleTimeUpdate}
+            commentMarkers={commentMarkers}
+            onFullscreenChange={handleFullscreenChange}
+            title={deliverable?.name}
+            onBack={() => navigation.goBack()}
+            onMenuPress={() => setShowActionMenu(true)}
+            onCommentPress={(time) => {
+              setCurrentVideoTime(time);
+              setShowCommentPopup(true);
+            }}
+            commentPopupOverlay={
+              showCommentPopup && isVideoFullscreen ? (
+                <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+                  <TouchableOpacity
+                    style={styles.commentPopupOverlay}
+                    activeOpacity={1}
+                    onPress={() => setShowCommentPopup(false)}>
+                    <KeyboardAvoidingView
+                      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                      style={styles.commentPopupKeyboard}>
+                      <TouchableOpacity
+                        activeOpacity={1}
+                        onPress={e => e.stopPropagation()}
+                        style={[styles.commentPopupContent, {paddingHorizontal: Math.max(insets.left, insets.right, theme.spacing.md), paddingBottom: Math.max(insets.bottom, theme.spacing.sm)}]}>
+                        <View style={styles.commentPopupInputRow}>
+                          <TouchableOpacity
+                            style={styles.timestampButton}
+                            onPress={addTimestamp}>
+                            <Clock size={14} color="rgba(255, 255, 255, 0.7)" />
+                            <Text style={styles.timestampButtonText}>
+                              {formatVideoTimestamp(currentVideoTime)}
+                            </Text>
+                          </TouchableOpacity>
+                          <TextInput
+                            style={styles.commentPopupInput}
+                            placeholder="Leave feedback..."
+                            placeholderTextColor={theme.colors.textMuted}
+                            value={commentText}
+                            onChangeText={setCommentText}
+                            multiline
+                            maxLength={1000}
+                            autoFocus
+                            autoCorrect={false}
+                            autoCapitalize="none"
+                          />
+                          <TouchableOpacity
+                            style={[
+                              styles.sendButton,
+                              (!commentText.trim() || isSubmitting) && styles.sendButtonDisabled,
+                            ]}
+                            onPress={async () => {
+                              await handleSubmitComment();
+                              setShowCommentPopup(false);
+                            }}
+                            disabled={!commentText.trim() || isSubmitting}>
+                            {isSubmitting ? (
+                              <ActivityIndicator size="small" color={theme.colors.textPrimary} />
+                            ) : (
+                              <Send
+                                size={18}
+                                color={commentText.trim() ? theme.colors.textPrimary : theme.colors.textMuted}
+                              />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      </TouchableOpacity>
+                    </KeyboardAvoidingView>
+                  </TouchableOpacity>
+                </View>
+              ) : null
+            }
+            showOverlayHeader
+          />
         ) : (
           <VideoPlayer
             ref={videoRef}
@@ -608,6 +890,71 @@ export function DeliverableReviewScreen() {
             title={deliverable?.name}
             onBack={() => navigation.goBack()}
             onMenuPress={() => setShowActionMenu(true)}
+            onCommentPress={(time) => {
+              setCurrentVideoTime(time);
+              setShowCommentPopup(true);
+            }}
+            commentPopupOverlay={
+              showCommentPopup && isVideoFullscreen ? (
+                <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+                  <TouchableOpacity
+                    style={styles.commentPopupOverlay}
+                    activeOpacity={1}
+                    onPress={() => setShowCommentPopup(false)}>
+                    <KeyboardAvoidingView
+                      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                      style={styles.commentPopupKeyboard}>
+                      <TouchableOpacity
+                        activeOpacity={1}
+                        onPress={e => e.stopPropagation()}
+                        style={[styles.commentPopupContent, {paddingHorizontal: Math.max(insets.left, insets.right, theme.spacing.md), paddingBottom: Math.max(insets.bottom, theme.spacing.sm)}]}>
+                        <View style={styles.commentPopupInputRow}>
+                          <TouchableOpacity
+                            style={styles.timestampButton}
+                            onPress={addTimestamp}>
+                            <Clock size={14} color="rgba(255, 255, 255, 0.7)" />
+                            <Text style={styles.timestampButtonText}>
+                              {formatVideoTimestamp(currentVideoTime)}
+                            </Text>
+                          </TouchableOpacity>
+                          <TextInput
+                            style={styles.commentPopupInput}
+                            placeholder="Leave feedback..."
+                            placeholderTextColor={theme.colors.textMuted}
+                            value={commentText}
+                            onChangeText={setCommentText}
+                            multiline
+                            maxLength={1000}
+                            autoFocus
+                            autoCorrect={false}
+                            autoCapitalize="none"
+                          />
+                          <TouchableOpacity
+                            style={[
+                              styles.sendButton,
+                              (!commentText.trim() || isSubmitting) && styles.sendButtonDisabled,
+                            ]}
+                            onPress={async () => {
+                              await handleSubmitComment();
+                              setShowCommentPopup(false);
+                            }}
+                            disabled={!commentText.trim() || isSubmitting}>
+                            {isSubmitting ? (
+                              <ActivityIndicator size="small" color={theme.colors.textPrimary} />
+                            ) : (
+                              <Send
+                                size={18}
+                                color={commentText.trim() ? theme.colors.textPrimary : theme.colors.textMuted}
+                              />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      </TouchableOpacity>
+                    </KeyboardAvoidingView>
+                  </TouchableOpacity>
+                </View>
+              ) : null
+            }
             showOverlayHeader
           />
         )}
@@ -791,7 +1138,7 @@ export function DeliverableReviewScreen() {
                 disabled={isDownloading || !currentVersion?.file_url}>
                 <Download size={20} color={theme.colors.textPrimary} />
                 <Text style={styles.actionMenuText}>
-                  {isDownloading ? 'Downloading...' : 'Download to Photos'}
+                  {getDownloadButtonText()}
                 </Text>
               </TouchableOpacity>
               <View style={styles.actionMenuDivider} />
@@ -843,6 +1190,69 @@ export function DeliverableReviewScreen() {
           </TouchableOpacity>
         </Modal>
 
+        {/* Comment popup - triggered from video overlay (Modal only when NOT fullscreen; fullscreen uses overlay inside VideoPlayer) */}
+        <Modal
+          visible={showCommentPopup && !isVideoFullscreen}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setShowCommentPopup(false)}>
+          <TouchableOpacity
+            style={styles.commentPopupOverlay}
+            activeOpacity={1}
+            onPress={() => setShowCommentPopup(false)}>
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              style={styles.commentPopupKeyboard}>
+              <TouchableOpacity
+                activeOpacity={1}
+                onPress={e => e.stopPropagation()}
+                style={[styles.commentPopupContent, {paddingHorizontal: Math.max(insets.left, insets.right, theme.spacing.md), paddingBottom: Math.max(insets.bottom, theme.spacing.sm)}]}>
+              <View style={styles.commentPopupInputRow}>
+                <TouchableOpacity
+                  style={styles.timestampButton}
+                  onPress={addTimestamp}>
+                  <Clock size={14} color="rgba(255, 255, 255, 0.7)" />
+                  <Text style={styles.timestampButtonText}>
+                    {formatVideoTimestamp(currentVideoTime)}
+                  </Text>
+                </TouchableOpacity>
+                <TextInput
+                  style={styles.commentPopupInput}
+                  placeholder="Leave feedback..."
+                  placeholderTextColor={theme.colors.textMuted}
+                  value={commentText}
+                  onChangeText={setCommentText}
+                  multiline
+                  maxLength={1000}
+                  autoFocus
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.sendButton,
+                    (!commentText.trim() || isSubmitting) && styles.sendButtonDisabled,
+                  ]}
+                  onPress={async () => {
+                    await handleSubmitComment();
+                    setShowCommentPopup(false);
+                  }}
+                  disabled={!commentText.trim() || isSubmitting}>
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color={theme.colors.textPrimary} />
+                  ) : (
+                    <Send
+                      size={18}
+                      color={commentText.trim() ? theme.colors.textPrimary : theme.colors.textMuted}
+                    />
+                  )}
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+            </KeyboardAvoidingView>
+          </TouchableOpacity>
+        </Modal>
+
         {/* Share Modal */}
         <ShareModal
           visible={showShareModal}
@@ -861,6 +1271,112 @@ export function DeliverableReviewScreen() {
           onCopyLink={copyShareLink}
           onClose={resetShareModal}
         />
+
+        {/* Download Progress Modal */}
+        <Modal
+          visible={showDownloadModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            if (downloadStatus !== 'downloading' && downloadStatus !== 'saving') {
+              resetDownloadModal();
+            }
+          }}>
+          <View style={downloadModalStyles.overlay}>
+            <View style={downloadModalStyles.container}>
+              {/* Icon */}
+              <View style={downloadModalStyles.iconContainer}>
+                {downloadStatus === 'success' ? (
+                  <Animated.View style={{transform: [{scale: successScaleAnim}]}}>
+                    <View style={downloadModalStyles.successIcon}>
+                      <Check size={32} color={theme.colors.success} strokeWidth={3} />
+                    </View>
+                  </Animated.View>
+                ) : downloadStatus === 'error' ? (
+                  <View style={downloadModalStyles.errorIcon}>
+                    <X size={32} color={theme.colors.error} strokeWidth={3} />
+                  </View>
+                ) : (
+                  <View style={downloadModalStyles.downloadIcon}>
+                    {(deliverable?.type === 'video' || deliverable?.type === undefined) ? (
+                      <FileVideo size={32} color={theme.colors.accent} />
+                    ) : (
+                      <FileImage size={32} color={theme.colors.accent} />
+                    )}
+                  </View>
+                )}
+              </View>
+
+              {/* Title */}
+              <Text style={downloadModalStyles.title}>
+                {downloadStatus === 'downloading' && 'Downloading'}
+                {downloadStatus === 'saving' && 'Saving to Camera Roll'}
+                {downloadStatus === 'success' && 'Saved!'}
+                {downloadStatus === 'error' && 'Download Failed'}
+              </Text>
+
+              {/* Subtitle / File name */}
+              <Text style={downloadModalStyles.subtitle} numberOfLines={1}>
+                {deliverable?.name || 'File'}
+                {currentVersion?.version_number === 100 ? ' (Final)' : ` V${currentVersion?.version_number || 1}`}
+              </Text>
+
+              {/* Progress bar (only during download) */}
+              {(downloadStatus === 'downloading' || downloadStatus === 'saving') && (
+                <View style={downloadModalStyles.progressContainer}>
+                  <View style={downloadModalStyles.progressTrack}>
+                    <Animated.View
+                      style={[
+                        downloadModalStyles.progressFill,
+                        {
+                          width: downloadProgressAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: ['0%', '100%'],
+                          }),
+                        },
+                      ]}
+                    />
+                  </View>
+                  <Text style={downloadModalStyles.progressText}>
+                    {downloadStatus === 'saving' 
+                      ? 'Saving...'
+                      : `${formatFileSize(downloadedBytes)} / ${formatFileSize(downloadSize || 0)}`
+                    }
+                  </Text>
+                </View>
+              )}
+
+              {/* Success message */}
+              {downloadStatus === 'success' && (
+                <Text style={downloadModalStyles.successText}>
+                  Check the "PostHive" album in Photos
+                </Text>
+              )}
+
+              {/* Error message */}
+              {downloadStatus === 'error' && (
+                <>
+                  <Text style={downloadModalStyles.errorText}>
+                    {downloadError || 'Something went wrong'}
+                  </Text>
+                  <TouchableOpacity
+                    style={downloadModalStyles.retryButton}
+                    onPress={() => {
+                      resetDownloadModal();
+                      handleDownload();
+                    }}>
+                    <Text style={downloadModalStyles.retryButtonText}>Try Again</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={downloadModalStyles.dismissButton}
+                    onPress={resetDownloadModal}>
+                    <Text style={downloadModalStyles.dismissButtonText}>Dismiss</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -1206,6 +1722,130 @@ function ShareModal({
     </Modal>
   );
 }
+
+const downloadModalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: theme.spacing.xl,
+  },
+  container: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.lg,
+    padding: theme.spacing.xl,
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 320,
+    borderWidth: 1,
+    borderColor: theme.colors.surfaceBorder,
+  },
+  iconContainer: {
+    marginBottom: theme.spacing.lg,
+  },
+  downloadIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: theme.colors.accent + '20',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  successIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: theme.colors.successBackground,
+    borderWidth: 2,
+    borderColor: theme.colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  errorIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: theme.colors.error + '20',
+    borderWidth: 2,
+    borderColor: theme.colors.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: {
+    fontSize: theme.typography.fontSize.lg,
+    fontFamily: theme.typography.fontFamily.bold,
+    color: theme.colors.textPrimary,
+    marginBottom: theme.spacing.xs,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: theme.typography.fontSize.sm,
+    fontFamily: theme.typography.fontFamily.medium,
+    color: theme.colors.textSecondary,
+    marginBottom: theme.spacing.lg,
+    textAlign: 'center',
+  },
+  progressContainer: {
+    width: '100%',
+    marginBottom: theme.spacing.md,
+  },
+  progressTrack: {
+    height: 6,
+    backgroundColor: theme.colors.surfaceBorder,
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: theme.spacing.sm,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: theme.colors.accent,
+    borderRadius: 3,
+  },
+  progressText: {
+    fontSize: theme.typography.fontSize.xs,
+    fontFamily: theme.typography.fontFamily.medium,
+    color: theme.colors.textMuted,
+    textAlign: 'center',
+  },
+  successText: {
+    fontSize: theme.typography.fontSize.sm,
+    fontFamily: theme.typography.fontFamily.regular,
+    color: theme.colors.textSecondary,
+    textAlign: 'center',
+    marginTop: theme.spacing.sm,
+  },
+  errorText: {
+    fontSize: theme.typography.fontSize.sm,
+    fontFamily: theme.typography.fontFamily.regular,
+    color: theme.colors.error,
+    textAlign: 'center',
+    marginBottom: theme.spacing.lg,
+  },
+  retryButton: {
+    backgroundColor: theme.colors.accent,
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.xl,
+    borderRadius: theme.borderRadius.md,
+    marginBottom: theme.spacing.sm,
+    width: '100%',
+    alignItems: 'center',
+  },
+  retryButtonText: {
+    fontSize: theme.typography.fontSize.md,
+    fontFamily: theme.typography.fontFamily.semibold,
+    color: theme.colors.textInverse,
+  },
+  dismissButton: {
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.xl,
+  },
+  dismissButtonText: {
+    fontSize: theme.typography.fontSize.md,
+    fontFamily: theme.typography.fontFamily.medium,
+    color: theme.colors.textMuted,
+  },
+});
 
 const shareModalStyles = StyleSheet.create({
   overlay: {
@@ -1635,6 +2275,37 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: 'transparent',
+  },
+  commentPopupOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'flex-end',
+  },
+  commentPopupKeyboard: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'flex-end',
+  },
+  commentPopupContent: {
+    backgroundColor: theme.colors.surfaceElevated,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingTop: theme.spacing.sm,
+  },
+  commentPopupInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
+  commentPopupInput: {
+    flex: 1,
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.md,
+    maxHeight: 44,
+    minHeight: 32,
+    paddingVertical: 6,
+    paddingHorizontal: 0,
+    textAlignVertical: 'center',
   },
 });
 

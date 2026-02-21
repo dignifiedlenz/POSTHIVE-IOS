@@ -9,6 +9,7 @@ import {
   Dimensions,
   Linking,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import {NavigationContainer} from '@react-navigation/native';
 import {createStackNavigator} from '@react-navigation/stack';
@@ -35,15 +36,20 @@ import {CreationFlowScreen} from '../screens/creation/CreationFlowScreen';
 import {DeliverableReviewScreen} from '../screens/deliverables/DeliverableReviewScreen';
 import {ProjectsScreen} from '../screens/projects/ProjectsScreen';
 import {ProjectDeliverablesScreen} from '../screens/projects/ProjectDeliverablesScreen';
+import {SeriesItemsScreen} from '../screens/series/SeriesItemsScreen';
+import {SeriesListScreen} from '../screens/series/SeriesListScreen';
 import {ProfileScreen} from '../screens/profile/ProfileScreen';
 import {NotificationSettingsScreen} from '../screens/settings/NotificationSettingsScreen';
+import {TransferHistoryScreen} from '../screens/transfer/TransferHistoryScreen';
+import {TransferDetailScreen} from '../screens/transfer/TransferDetailScreen';
 import {CalendarScreen} from '../screens/calendar/CalendarScreen';
 
 // Push Notifications
-import {setupBackgroundHandler, usePushNotifications} from '../hooks/usePushNotifications';
+import {setupBackgroundHandler, usePushNotifications, setupBackgroundRefresh} from '../hooks';
 
-// Initialize background handler
+// Initialize background handlers
 setupBackgroundHandler();
+setupBackgroundRefresh();
 
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
 
@@ -60,13 +66,17 @@ export type DashboardStackParamList = {
 
 export type ReviewStackParamList = {
   ProjectsList: undefined;
+  SeriesList: undefined;
   ProjectDeliverables: {projectId: string; projectName: string; clientName?: string; thumbnailUrl?: string};
+  SeriesItems: {seriesId: string; seriesName: string; seriesDescription?: string; thumbnailUrl?: string; itemCount: number};
   DeliverableReview: {deliverableId: string; versionId?: string; commentId?: string};
 };
 
 export type ProfileStackParamList = {
   ProfileMain: undefined;
   NotificationSettings: undefined;
+  TransferHistory: undefined;
+  TransferDetail: {transfer: import('../lib/api').TransferOperation};
 };
 
 export type MainTabParamList = {
@@ -115,8 +125,16 @@ function ReviewStackNavigator() {
         component={ProjectsScreen}
       />
       <ReviewStack.Screen
+        name="SeriesList"
+        component={SeriesListScreen}
+      />
+      <ReviewStack.Screen
         name="ProjectDeliverables"
         component={ProjectDeliverablesScreen}
+      />
+      <ReviewStack.Screen
+        name="SeriesItems"
+        component={SeriesItemsScreen}
       />
       <ReviewStack.Screen
         name="DeliverableReview"
@@ -137,6 +155,14 @@ function ProfileStackNavigator() {
       <ProfileStack.Screen
         name="NotificationSettings"
         component={NotificationSettingsScreen}
+      />
+      <ProfileStack.Screen
+        name="TransferHistory"
+        component={TransferHistoryScreen}
+      />
+      <ProfileStack.Screen
+        name="TransferDetail"
+        component={TransferDetailScreen}
       />
     </ProfileStack.Navigator>
   );
@@ -185,6 +211,10 @@ function AuthenticatedApp({userId, workspaceId, onTabIndexChange}: Authenticated
           });
         } else if (path === 'deliverables') {
           navigationRef.current?.navigate('ReviewTab');
+        } else if (path === 'series') {
+          navigationRef.current?.navigate('ReviewTab', {
+            screen: 'SeriesList',
+          });
         } else if (path === 'calendar') {
           navigationRef.current?.navigate('CalendarTab');
         } else if (path === 'transfers') {
@@ -374,22 +404,22 @@ function MainTabs({orientation, onMenuPress}: MainTabsProps) {
         }}
       />
       <Tab.Screen
-        name="CalendarTab"
-        component={CalendarScreen}
-        options={{
-          tabBarLabel: 'Calendar',
-          tabBarIcon: ({color, size}) => (
-            <Calendar size={size} color={color} />
-          ),
-        }}
-      />
-      <Tab.Screen
         name="ReviewTab"
         component={ReviewStackNavigator}
         options={{
           tabBarLabel: 'Projects',
           tabBarIcon: ({color, size}) => (
             <Folder size={size} color={color} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="CalendarTab"
+        component={CalendarScreen}
+        options={{
+          tabBarLabel: 'Calendar',
+          tabBarIcon: ({color, size}) => (
+            <Calendar size={size} color={color} />
           ),
         }}
       />
@@ -465,6 +495,13 @@ function SplashOverlay({isLoading, onComplete}: SplashOverlayProps) {
           },
         ]}>
         <Text style={styles.logo}>POSTHIVE</Text>
+        {isLoading && (
+          <ActivityIndicator
+            size="large"
+            color={theme.colors.textPrimary}
+            style={styles.splashSpinner}
+          />
+        )}
       </Animated.View>
     </View>
   );
@@ -727,6 +764,9 @@ const styles = StyleSheet.create({
     fontSize: 56,
     fontWeight: '900',
     letterSpacing: -1,
+  },
+  splashSpinner: {
+    marginTop: 24,
   },
   fullScreen: {
     flex: 1,

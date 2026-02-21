@@ -25,6 +25,7 @@ import {
 } from 'lucide-react-native';
 import {AuthorizationStatus} from '@notifee/react-native';
 import {theme} from '../../theme';
+import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useAuth} from '../../hooks/useAuth';
 import {
   usePushNotifications,
@@ -128,13 +129,7 @@ export function NotificationSettingsScreen() {
   const isDisabled = !preferences.enabled || !hasPermission;
 
   if (isLoading) {
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.textPrimary} />
-        </View>
-      </SafeAreaView>
-    );
+    return <BrandedLoadingScreen message="Loading settings..." />;
   }
 
   return (
