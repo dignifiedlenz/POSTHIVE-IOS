@@ -15,6 +15,7 @@ import {
   CreateEventInput,
   CalendarEvent,
   WorkspaceMember,
+  DriveAsset,
 } from './types';
 import {resolveThumbnail, resolvePlaybackUrl, extractBunnyGuid, constructBunnyThumbnail} from './utils';
 
@@ -668,6 +669,131 @@ export async function getDeliverableGalleryImages(
       uploaded_at: asset.uploaded_at || undefined,
     }));
 
+  // Helper to map gallery_items to photos
+  const mapGalleryItemsToPhotos = (items: any[]): Array<{id: string; url: string; thumbnail_url?: string; name?: string; uploaded_at?: string}> => {
+    const photoItems = items
+      .map((item: any) => {
+        const asset = item.asset;
+        if (!asset) return null;
+        const assetType = String(asset.type || '').toLowerCase();
+        const mimeType = String(asset.mime_type || '').toLowerCase();
+        const isImage =
+          assetType === 'image' ||
+          assetType === 'foto' ||
+          assetType === 'graphic' ||
+          mimeType.startsWith('image/');
+
+        if (!isImage) return null;
+
+        const url =
+          asset.bunny_cdn_url ||
+          asset.r2_url ||
+          asset.storage_url ||
+          '';
+
+        if (!url) return null;
+
+        return {
+          id: item.id || asset.id,
+          url,
+          thumbnail_url:
+            asset.bunny_thumbnail_url ||
+            asset.bunny_cdn_url ||
+            asset.r2_url ||
+            asset.storage_url ||
+            undefined,
+          name: item.name || asset.name,
+          uploaded_at: item.created_at || asset.uploaded_at || undefined,
+        };
+      })
+      .filter(Boolean) as Array<{
+        id: string;
+        url: string;
+        thumbnail_url?: string;
+        name?: string;
+        uploaded_at?: string;
+      }>;
+    return photoItems;
+  };
+
+  const galleryItemsSelect = `
+    id,
+    name,
+    sort_order,
+    created_at,
+    asset:assets!gallery_items_asset_id_fkey (
+      id,
+      name,
+      storage_url,
+      r2_url,
+      bunny_cdn_url,
+      bunny_thumbnail_url,
+      uploaded_at,
+      type,
+      mime_type
+    )
+  `;
+
+  // Preferred source: gallery_items (new foto gallery model)
+  // Try deliverable_id first; fallback to project_id (items may be linked by project only)
+  try {
+    let galleryItems: any[] | null = null;
+    let galleryItemsError: any = null;
+
+    const byDeliverable = await supabase
+      .from('gallery_items')
+      .select(galleryItemsSelect)
+      .eq('deliverable_id', deliverableId)
+      .order('sort_order', {ascending: true})
+      .order('created_at', {ascending: true});
+
+    galleryItems = byDeliverable.data;
+    galleryItemsError = byDeliverable.error;
+
+    console.log('[Gallery Debug] gallery_items by deliverable_id', {
+      error: galleryItemsError?.message || null,
+      count: galleryItems?.length || 0,
+    });
+
+    if ((!galleryItemsError && (!galleryItems || galleryItems.length === 0)) || galleryItemsError) {
+      const {data: deliverableRow} = await supabase
+        .from('deliverables')
+        .select('project_id')
+        .eq('id', deliverableId)
+        .single();
+
+      const projectId = deliverableRow?.project_id;
+      if (projectId) {
+        const byProject = await supabase
+          .from('gallery_items')
+          .select(galleryItemsSelect)
+          .eq('project_id', projectId)
+          .order('sort_order', {ascending: true})
+          .order('created_at', {ascending: true});
+
+        console.log('[Gallery Debug] gallery_items by project_id fallback', {
+          error: byProject.error?.message || null,
+          count: byProject.data?.length || 0,
+        });
+
+        if (!byProject.error && byProject.data && byProject.data.length > 0) {
+          galleryItems = byProject.data;
+          galleryItemsError = null;
+        }
+      }
+    }
+
+    if (!galleryItemsError && galleryItems && galleryItems.length > 0) {
+      const photoItems = mapGalleryItemsToPhotos(galleryItems);
+      console.log('[Gallery Debug] gallery_items mapped photos', {count: photoItems.length});
+      if (photoItems.length > 0) {
+        return photoItems;
+      }
+    }
+  } catch (galleryItemsErr) {
+    console.error('[Gallery Debug] Error reading gallery_items:', galleryItemsErr);
+  }
+
   // Try to read assets from version_uploads (preferred)
   const versionNumbers = Array.from(
     new Set([versionNumber, 0].filter(v => v !== null && v !== undefined)),
@@ -805,6 +931,26 @@ export async function getDeliverableGalleryImages(
 export async function getDeliverableComments(
   deliverableId: string,
 ): Promise<Comment[]> {
+  // Resolve version IDs first, then fetch comments by version_id.
+  // This is more reliable than filtering through a nested relation alias.
+  const {data: versions, error: versionsError} = await supabase
+    .from('versions')
+    .select('id, version_number')
+    .eq('deliverable_id', deliverableId);
+
+  if (versionsError) {
+    throw versionsError;
+  }
+
+  if (!versions || versions.length === 0) {
+    return [];
+  }
+
+  const versionIds = versions.map(v => v.id);
+  const versionNumberById = new Map(
+    versions.map(v => [v.id, v.version_number] as [string, number]),
+  );
+
   const {data, error} = await supabase
     .from('comments')
     .select(
@@ -822,11 +968,11 @@ export async function getDeliverableComments(
       is_client_comment,
       client_name,
       client_email,
-      author:users!comments_author_id_fkey (id, name, email, avatar),
-      version:versions!comments_version_id_fkey (id, version_number, deliverable_id)
+      version_id,
+      author:users!comments_author_id_fkey (id, name, email, avatar)
     `,
     )
-    .eq('version.deliverable_id', deliverableId)
+    .in('version_id', versionIds)
     .order('created_at', {ascending: true});
 
   if (error) {
@@ -853,19 +999,18 @@ export async function getDeliverableComments(
       email: string;
       avatar?: string;
     } | null;
-    version: {
-      id: string;
-      version_number: number;
-      deliverable_id: string;
-    } | null;
+    version_id: string | null;
   }
 
   return ((data || []) as CommentData[])
-    .filter((c: CommentData) => c.version !== null)
+    .filter((c: CommentData) => !!c.version_id && versionNumberById.has(c.version_id))
     .map((c: CommentData) => {
       // Parse timestamps (may come as strings from DB)
       const startTime = c.start_time ? parseFloat(String(c.start_time)) : undefined;
       const endTime = c.end_time ? parseFloat(String(c.end_time)) : undefined;
+      const versionNumber = c.version_id
+        ? versionNumberById.get(c.version_id)
+        : undefined;
       
       // Handle client comments vs authenticated user comments
       // Client comments have is_client_comment=true and use client_name/client_email
@@ -891,7 +1036,7 @@ export async function getDeliverableComments(
         start_time: startTime,
         end_time: endTime,
         timestamp: c.timestamp ? parseFloat(String(c.timestamp)) : undefined,
-        version_number: c.version!.version_number,
+        version_number: versionNumber ?? 0,
         completed: c.completed || false,
         completed_by: c.completed_by,
         completed_at: c.completed_at,
@@ -1025,6 +1170,35 @@ export async function setUserPreferredWorkspace(userId: string, workspaceId: str
 }
 
 export async function getUserWorkspaces(userId: string): Promise<Workspace[]> {
+  const {data: sessionData} = await supabase.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+
+  if (accessToken) {
+    try {
+      console.log('[mobile-auth] getUserWorkspaces:api-first:start', {userId});
+      const response = await fetch(`${API_BASE_URL}/api/workspaces`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      const payload = await parseJSONResponse(response);
+      console.log('[mobile-auth] getUserWorkspaces:api-first:response', {
+        ok: response.ok,
+        status: response.status,
+        count: Array.isArray(payload?.workspaces) ? payload.workspaces.length : 0,
+      });
+
+      if (response.ok && Array.isArray(payload?.workspaces) && payload.workspaces.length > 0) {
+        return payload.workspaces as Workspace[];
+      }
+    } catch (apiError) {
+      console.error('[mobile-auth] getUserWorkspaces:api-first:error', apiError);
+    }
+  } else {
+    console.log('[mobile-auth] getUserWorkspaces:api-first:no-access-token');
+  }
+
   const {data, error} = await supabase
     .from('workspace_members')
     .select(
@@ -1035,7 +1209,15 @@ export async function getUserWorkspaces(userId: string): Promise<Workspace[]> {
     )
     .eq('user_id', userId);
 
+  console.log('[mobile-auth] getUserWorkspaces:direct-result', {
+    userId,
+    hasError: !!error,
+    error: error?.message || null,
+    count: data?.length || 0,
+  });
+
   if (error) {
+    console.error('[mobile-auth] getUserWorkspaces:direct-error', error);
     throw error;
   }
 
@@ -1047,16 +1229,66 @@ export async function getUserWorkspaces(userId: string): Promise<Workspace[]> {
       slug: string;
       logo?: string;
       tier?: string;
-    };
+    } | null;
   }
 
-  return ((data || []) as WorkspaceMemberData[]).map(
+  const mapped = ((data || []) as WorkspaceMemberData[])
+    .filter((m: WorkspaceMemberData) => m.workspace !== null)
+    .map(
     (m: WorkspaceMemberData) => ({
-      ...m.workspace,
+      ...m.workspace!,
       role: m.role,
-      tier: (m.workspace.tier as Workspace['tier']) || 'free',
+      tier: (m.workspace!.tier as Workspace['tier']) || 'free',
     }),
   );
+
+  if (mapped.length > 0) {
+    return mapped;
+  }
+
+  console.log('[mobile-auth] getUserWorkspaces:fallback-api:start', {userId});
+  if (!accessToken) {
+    console.log('[mobile-auth] getUserWorkspaces:fallback-api:no-access-token');
+    return [];
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/user/workspace`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    const payload = await parseJSONResponse(response);
+    console.log('[mobile-auth] getUserWorkspaces:fallback-api:response', {
+      ok: response.ok,
+      status: response.status,
+      hasWorkspace: !!payload?.workspace,
+      memberCount: Array.isArray(payload?.members) ? payload.members.length : 0,
+    });
+
+    if (!response.ok || !payload?.workspace) {
+      return [];
+    }
+
+    const role =
+      Array.isArray(payload.members)
+        ? payload.members.find((member: {user_id?: string; role?: string}) => member.user_id === userId)?.role
+        : undefined;
+
+    return [{
+      id: payload.workspace.id,
+      name: payload.workspace.name,
+      slug: payload.workspace.slug,
+      logo: payload.workspace.logo || undefined,
+      tier: (payload.workspace.tier as Workspace['tier']) || 'free',
+      role,
+    }];
+  } catch (fallbackError) {
+    console.error('[mobile-auth] getUserWorkspaces:fallback-api:error', fallbackError);
+    return [];
+  }
 }
 
 // ===== PROJECTS =====
@@ -1487,6 +1719,123 @@ export async function getClients(workspaceId: string): Promise<Client[]> {
   return data || [];
 }
 
+export async function getDriveAssets(
+  workspaceId: string,
+  clientId: string,
+  parentFolderId: string | null = null,
+): Promise<DriveAsset[]> {
+  let query = supabase
+    .from('assets')
+    .select(
+      `
+      id,
+      name,
+      display_name,
+      type,
+      file_size,
+      mime_type,
+      parent_folder_id,
+      folder_path,
+      folder_color,
+      is_folder,
+      bunny_cdn_url,
+      playback_url,
+      storage_url,
+      storage_path,
+      provider,
+      uploaded_at,
+      tags,
+      processing_status
+    `,
+    )
+    .eq('workspace_id', workspaceId)
+    .eq('client_id', clientId)
+    .contains('tags', ['drive'])
+    .or('processing_status.is.null,processing_status.neq.uploading');
+
+  if (parentFolderId) {
+    query = query.eq('parent_folder_id', parentFolderId);
+  } else {
+    query = query.is('parent_folder_id', null);
+  }
+
+  const {data, error} = await query
+    .order('is_folder', {ascending: false})
+    .order('display_name', {ascending: true});
+
+  if (error) {
+    throw error;
+  }
+
+  return (data || []) as DriveAsset[];
+}
+
+export interface ProjectResource {
+  id: string;
+  name: string;
+  display_name?: string;
+  type: string;
+  file_size?: number | null;
+  mime_type?: string | null;
+  bunny_cdn_url?: string | null;
+  bunny_hls_url?: string | null;
+  playback_url?: string | null;
+  storage_url?: string | null;
+  r2_url?: string | null;
+  file_url?: string | null;
+  bunny_thumbnail_url?: string | null;
+  uploaded_at?: string;
+  tags?: string[] | null;
+  rating?: number | null;
+  processing_status?: string | null;
+}
+
+export async function getProjectResources(
+  workspaceId: string,
+  projectId: string,
+): Promise<ProjectResource[]> {
+  const {data, error} = await supabase
+    .from('assets')
+    .select(
+      `
+      id,
+      name,
+      display_name,
+      type,
+      file_size,
+      mime_type,
+      bunny_cdn_url,
+      playback_url,
+      storage_url,
+      uploaded_at,
+      tags,
+      rating,
+      processing_status
+    `,
+    )
+    .eq('workspace_id', workspaceId)
+    .eq('project_id', projectId)
+    .contains('tags', ['resources'])
+    .or('processing_status.is.null,processing_status.neq.uploading')
+    .order('uploaded_at', {ascending: false});
+
+  if (error) throw error;
+  return (data || []) as ProjectResource[];
+}
+
+export async function updateAssetTagsAndRating(
+  assetId: string,
+  tags: string[],
+  rating: number | null,
+): Promise<void> {
+  const {error} = await supabase
+    .from('assets')
+    .update({tags, rating, updated_at: new Date().toISOString()})
+    .eq('id', assetId);
+
+  if (error) throw error;
+}
+
 // ===== CREATE PROJECT =====
 
 export async function createProject(
@@ -1661,6 +2010,85 @@ export async function getDownloadUrl(storageUrl: string, filename?: string): Pro
   return data.signedUrl;
 }
 
+// ===== DRIVE UPLOAD =====
+
+export interface DriveUploadInitResponse {
+  success: boolean;
+  uploadType: string;
+  uploadUrl: string;
+  method: string;
+  headers: { 'Content-Type': string };
+  assetId: string;
+  cdnUrl?: string;
+  storagePath?: string;
+  isVideo?: boolean;
+  workspaceId?: string;
+}
+
+export async function initDriveUpload(params: {
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  workspaceId: string;
+  clientId?: string | null;
+  parentFolderId?: string | null;
+  tags?: string[];
+}): Promise<DriveUploadInitResponse> {
+  const {data: sessionData} = await supabase.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) {
+    throw new Error('Not authenticated');
+  }
+
+  const response = await fetch(`${API_BASE_URL}/api/drive/upload`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      fileName: params.fileName,
+      fileSize: params.fileSize,
+      fileType: params.fileType,
+      workspaceId: params.workspaceId,
+      clientId: params.clientId ?? null,
+      parentFolderId: params.parentFolderId ?? null,
+      tags: params.tags ?? ['drive'],
+    }),
+  });
+
+  const data = await parseJSONResponse(response);
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to init upload');
+  }
+  if (!data.uploadUrl || !data.assetId) {
+    throw new Error('Invalid upload response');
+  }
+  return data;
+}
+
+export async function completeDriveUpload(assetId: string, fileSize?: number): Promise<void> {
+  const {data: sessionData} = await supabase.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) {
+    throw new Error('Not authenticated');
+  }
+
+  const response = await fetch(`${API_BASE_URL}/api/drive/complete-upload`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({assetId, fileSize}),
+  });
+
+  const data = await parseJSONResponse(response);
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to complete upload');
+  }
+}
+
 // ===== MARK COMMENTS AS READ =====
 
 export async function markDeliverableCommentsAsRead(
@@ -1758,9 +2186,15 @@ export interface AICommandResult {
   };
 }
 
+export type AICommandTurn = {role: 'user' | 'assistant'; content: string};
+
 export async function executeAICommand(
   command: string,
   workspaceSlug: string,
+  options?: {
+    priorConversation?: AICommandTurn[];
+    userTimeZone?: string;
+  },
 ): Promise<AICommandResult> {
   const {data: sessionData} = await supabase.auth.getSession();
   const accessToken = sessionData.session?.access_token;
@@ -1771,12 +2205,22 @@ export async function executeAICommand(
 
   // Log token for debugging (first 20 chars for security)
   console.log('🔑 [AI Command] Access Token:', accessToken.substring(0, 20) + '...' + accessToken.substring(accessToken.length - 10));
-  console.log('🔑 [AI Command] Full Token (for testing):', accessToken);
   console.log('📤 [AI Command] Request:', {
     url: `${API_BASE_URL}/api/ai/command`,
     command,
     workspaceSlug,
+    priorConversationCount: options?.priorConversation?.length ?? 0,
   });
+
+  const userTimeZone =
+    options?.userTimeZone ||
+    (() => {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch {
+        return undefined;
+      }
+    })();
 
   const response = await fetch(`${API_BASE_URL}/api/ai/command`, {
     method: 'POST',
@@ -1787,6 +2231,8 @@ export async function executeAICommand(
     body: JSON.stringify({
       command,
       workspaceSlug,
+      priorConversation: options?.priorConversation ?? [],
+      userTimeZone,
     }),
   });
 

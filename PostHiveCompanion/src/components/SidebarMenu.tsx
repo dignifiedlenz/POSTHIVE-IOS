@@ -1,235 +1,453 @@
-import React, {useRef, useEffect} from 'react';
+import React, {useMemo, useState} from 'react';
 import {
-  View,
-  StyleSheet,
-  TouchableOpacity,
-  Text,
-  Animated,
+  ActivityIndicator,
+  Alert,
   Dimensions,
-  TouchableWithoutFeedback,
+  Linking,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import {useNavigation} from '@react-navigation/native';
-import {LayoutDashboard, Calendar, Folder, User, X} from 'lucide-react-native';
-import {theme} from '../theme';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import {
+  Mail,
+  ChevronDown,
+  X,
+} from 'lucide-react-native';
+
+import {theme} from '../theme';
+import {useAuth} from '../hooks/useAuth';
+import {WorkspaceDropdownModal} from './WorkspaceDropdownModal';
+import {canAccessWorkspaceNotifications} from '../lib/utils';
 
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
-const SIDEBAR_WIDTH = Math.min(280, SCREEN_WIDTH * 0.75);
+/** Slightly wider so right-aligned labels (e.g. NOTIFICATION SETTINGS) breathe. */
+export const SIDEBAR_WIDTH = Math.min(320, Math.round(SCREEN_WIDTH * 0.86));
 
 interface SidebarMenuProps {
-  isOpen: boolean;
   onClose: () => void;
   currentRoute: string;
+  onNavigate: (route: string, params?: object) => void;
 }
 
 interface MenuItem {
   label: string;
-  route: string;
-  icon: React.ComponentType<{size: number; color: string}>;
+  action: 'tab' | 'screen' | 'link' | 'signout';
+  route?: string;
+  screen?: string;
+  params?: object;
+  url?: string;
+  subtitle?: string;
+  activeRoutes?: string[];
 }
 
-const menuItems: MenuItem[] = [
+const primaryItems: MenuItem[] = [
   {
-    label: 'Dashboard',
-    route: 'DashboardTab',
-    icon: LayoutDashboard,
+    label: 'Drive',
+    action: 'screen',
+    route: 'Menu',
+    screen: 'DriveExplorer',
+    activeRoutes: ['DriveExplorer'],
   },
   {
-    label: 'Calendar',
-    route: 'CalendarTab',
-    icon: Calendar,
+    label: 'Transfers',
+    action: 'screen',
+    route: 'Menu',
+    screen: 'TransferHistory',
+    activeRoutes: ['TransferHistory', 'TransferDetail'],
   },
   {
-    label: 'Projects',
-    route: 'ReviewTab',
-    icon: Folder,
-  },
-  {
-    label: 'Profile',
-    route: 'ProfileTab',
-    icon: User,
+    label: 'Notifications',
+    action: 'tab',
+    route: 'MainTabs',
+    params: {
+      screen: 'Home',
+      params: {
+        screen: 'Dashboard',
+        params: {openNotifications: true},
+      },
+    },
+    activeRoutes: ['Dashboard', 'Home'],
   },
 ];
 
-export function SidebarMenu({isOpen, onClose, currentRoute}: SidebarMenuProps) {
-  const navigation = useNavigation();
+const footerItems: MenuItem[] = [
+  {
+    label: 'Notification Settings',
+    action: 'screen',
+    route: 'Menu',
+    screen: 'NotificationSettings',
+  },
+  {
+    label: 'Privacy Policy',
+    action: 'link',
+    url: 'https://www.posthive.app/legal/privacy',
+  },
+  {
+    label: 'Terms of Service',
+    action: 'link',
+    url: 'https://www.posthive.app/legal/terms',
+  },
+  {
+    label: 'Contact Support',
+    action: 'link',
+    url: 'mailto:support@posthive.app?subject=Support%20Request',
+  },
+  {
+    label: 'Feedback',
+    action: 'link',
+    url: 'mailto:feedback@posthive.app?subject=App%20Feedback',
+  },
+  {
+    label: 'Sign Out',
+    action: 'signout',
+  },
+];
+
+export function SidebarMenu({
+  onClose,
+  currentRoute,
+  onNavigate,
+}: SidebarMenuProps) {
   const insets = useSafeAreaInsets();
-  const slideAnim = useRef(new Animated.Value(-SIDEBAR_WIDTH)).current;
-  const overlayOpacity = useRef(new Animated.Value(0)).current;
+  const {user, currentWorkspace, workspaces, selectWorkspace, signOut} = useAuth();
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [showWorkspaceDropdown, setShowWorkspaceDropdown] = useState(false);
 
-  useEffect(() => {
-    if (isOpen) {
-      Animated.parallel([
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-        Animated.timing(overlayOpacity, {
-          toValue: 1,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    } else {
-      Animated.parallel([
-        Animated.timing(slideAnim, {
-          toValue: -SIDEBAR_WIDTH,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-        Animated.timing(overlayOpacity, {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-      ]).start();
+  const userName = useMemo(
+    () =>
+      user?.user_metadata?.name ||
+      user?.user_metadata?.full_name ||
+      user?.email?.split('@')[0] ||
+      'User',
+    [user],
+  );
+
+  const navPrimaryItems = useMemo(() => {
+    if (canAccessWorkspaceNotifications(currentWorkspace?.role)) {
+      return primaryItems;
     }
-  }, [isOpen, slideAnim, overlayOpacity]);
+    return primaryItems.filter(i => i.label !== 'Notifications');
+  }, [currentWorkspace?.role]);
 
-  const handleMenuItemPress = (route: string) => {
-    navigation.navigate(route as never);
-    onClose();
+  const runItemAction = async (item: MenuItem) => {
+    if (item.action === 'tab' && item.route) {
+      onNavigate(item.route, item.params);
+      onClose();
+      return;
+    }
+
+    if (item.action === 'screen' && item.route && item.screen) {
+      onNavigate(item.route, item.params ?? {screen: item.screen});
+      onClose();
+      return;
+    }
+
+    if (item.action === 'link' && item.url) {
+      await Linking.openURL(item.url);
+      onClose();
+      return;
+    }
+
+    if (item.action === 'signout') {
+      Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            setIsSigningOut(true);
+            try {
+              await signOut();
+            } finally {
+              setIsSigningOut(false);
+              onClose();
+            }
+          },
+        },
+      ]);
+    }
   };
 
-  if (!isOpen) {
-    return null;
-  }
+  const handleItemPress = (item: MenuItem) => {
+    void runItemAction(item).catch(() => {
+      Alert.alert('Action failed', 'Unable to complete that action right now.');
+    });
+  };
+
+  const padEnd = Math.max(20, insets.right + 4);
+  const padStart = Math.max(20, insets.left + 4);
 
   return (
-    <>
-      {/* Overlay */}
-      <TouchableWithoutFeedback onPress={onClose}>
-        <Animated.View
-          style={[
-            styles.overlay,
-            {
-              opacity: overlayOpacity,
-            },
-          ]}
-        />
-      </TouchableWithoutFeedback>
-
-      {/* Sidebar */}
-      <Animated.View
+    <View style={styles.sidebar}>
+      <View
         style={[
-          styles.sidebar,
+          styles.content,
           {
-            transform: [{translateX: slideAnim}],
-            paddingTop: insets.top + 16,
-            paddingBottom: insets.bottom + 16,
+            paddingTop: insets.top + 14,
+            paddingBottom: insets.bottom + 18,
+            paddingRight: padEnd,
+            paddingLeft: padStart,
           },
         ]}>
-        {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.title}>Menu</Text>
+          <TouchableOpacity
+            style={styles.workspaceSwitcher}
+            onPress={() => setShowWorkspaceDropdown(true)}
+            activeOpacity={0.8}>
+            <Text style={styles.workspaceSwitcherLabel}>Workspace</Text>
+            <View style={styles.workspaceSwitcherRow}>
+              <Text style={styles.workspaceSwitcherName} numberOfLines={1}>
+                {currentWorkspace?.name || 'Select workspace'}
+              </Text>
+              <ChevronDown size={16} color={theme.colors.textPrimary} />
+            </View>
+          </TouchableOpacity>
           <TouchableOpacity
             onPress={onClose}
             style={styles.closeButton}
-            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-            <X size={24} color={theme.colors.textPrimary} />
+            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+            accessibilityRole="button"
+            accessibilityLabel="Close menu">
+            <X size={22} color={theme.colors.textPrimary} />
           </TouchableOpacity>
         </View>
 
-        {/* Menu Items */}
-        <View style={styles.menuItems}>
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = currentRoute === item.route;
-
-            return (
-              <TouchableOpacity
-                key={item.route}
-                style={[styles.menuItem, isActive && styles.menuItemActive]}
-                onPress={() => handleMenuItemPress(item.route)}
-                activeOpacity={0.7}>
-                <Icon
-                  size={24}
-                  color={isActive ? theme.colors.textPrimary : theme.colors.textMuted}
-                />
-                <Text
-                  style={[
-                    styles.menuItemText,
-                    isActive && styles.menuItemTextActive,
-                  ]}>
-                  {item.label}
+        <View style={styles.profileCard}>
+          <View style={styles.profileText}>
+            <Text style={styles.profileName} numberOfLines={1}>
+              {userName}
+            </Text>
+            {user?.email ? (
+              <View style={styles.metaRow}>
+                <Text style={styles.metaText} numberOfLines={1}>
+                  {user.email}
                 </Text>
-              </TouchableOpacity>
-            );
-          })}
+                <Mail size={12} color={theme.colors.textMuted} />
+              </View>
+            ) : null}
+          </View>
         </View>
-      </Animated.View>
-    </>
+
+        <ScrollView
+          style={styles.scrollArea}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}>
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Navigate</Text>
+            <View style={styles.menuItems}>
+              {navPrimaryItems.map(item => {
+                const isActive = item.activeRoutes?.includes(currentRoute) ?? false;
+
+                return (
+                  <TouchableOpacity
+                    key={item.label}
+                    style={[styles.menuItem, isActive && styles.menuItemActive]}
+                    onPress={() => handleItemPress(item)}
+                    activeOpacity={0.75}>
+                    <View style={styles.menuItemContent}>
+                      <Text
+                        style={[styles.menuItemText, isActive && styles.menuItemTextActive]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.85}>
+                        {item.label}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+
+          <View style={styles.sectionDivider} />
+
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>More</Text>
+            <View style={styles.menuItems}>
+              {footerItems.map(item => {
+                const isBusy = item.action === 'signout' && isSigningOut;
+
+                return (
+                  <TouchableOpacity
+                    key={item.label}
+                    style={styles.footerItem}
+                    onPress={() => handleItemPress(item)}
+                    activeOpacity={0.75}
+                    disabled={isBusy}>
+                    {isBusy ? (
+                      <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                    ) : null}
+                    <Text style={styles.footerItemText} numberOfLines={1}>
+                      {item.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </ScrollView>
+      </View>
+      <WorkspaceDropdownModal
+        visible={showWorkspaceDropdown}
+        workspaces={workspaces}
+        currentWorkspace={currentWorkspace}
+        onSelectWorkspace={(workspace) => {
+          selectWorkspace(workspace);
+          setShowWorkspaceDropdown(false);
+        }}
+        onClose={() => setShowWorkspaceDropdown(false)}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    zIndex: 9998,
-  },
   sidebar: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: SIDEBAR_WIDTH,
-    backgroundColor: theme.colors.background,
-    zIndex: 9999,
-    elevation: 9999,
-    borderRightWidth: 1,
-    borderRightColor: theme.colors.border,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 2,
-      height: 0,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
+    flex: 1,
+    backgroundColor: '#000',
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: 'rgba(255,255,255,0.08)',
+  },
+  content: {
+    flex: 1,
   },
   header: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingBottom: 24,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: theme.colors.textPrimary,
-    letterSpacing: -0.5,
+    gap: 12,
+    paddingBottom: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
   },
   closeButton: {
     padding: 4,
+    marginTop: 2,
   },
-  menuItems: {
-    paddingTop: 16,
+  workspaceSwitcher: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'flex-end',
   },
-  menuItem: {
+  workspaceSwitcherLabel: {
+    alignSelf: 'flex-end',
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.fontSize.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 1.2,
+    marginBottom: 6,
+  },
+  workspaceSwitcherRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    gap: 16,
+    justifyContent: 'flex-end',
+    gap: 8,
+    maxWidth: '100%',
+  },
+  workspaceSwitcherName: {
+    flexShrink: 1,
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.md,
+    fontFamily: theme.typography.fontFamily.bold,
+    textAlign: 'right',
+  },
+  profileCard: {
+    flexDirection: 'row',
+    paddingTop: 18,
+    paddingBottom: 18,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'flex-end',
+  },
+  profileText: {
+    maxWidth: '100%',
+    gap: 4,
+    alignItems: 'flex-end',
+  },
+  profileName: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.md,
+    fontFamily: theme.typography.fontFamily.bold,
+    textAlign: 'right',
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    justifyContent: 'flex-end',
+    maxWidth: '100%',
+  },
+  metaText: {
+    flexShrink: 1,
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.fontSize.xs,
+    textAlign: 'right',
+  },
+  scrollArea: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  section: {
+    paddingTop: 14,
+  },
+  sectionLabel: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.fontSize.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 1.2,
+    marginBottom: 8,
+    textAlign: 'right',
+    alignSelf: 'stretch',
+  },
+  sectionDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    marginVertical: 14,
+  },
+  menuItems: {
+    gap: 2,
+  },
+  menuItem: {
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    alignItems: 'flex-end',
   },
   menuItemActive: {
-    backgroundColor: theme.colors.surface,
-    borderLeftWidth: 3,
-    borderLeftColor: theme.colors.textPrimary,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  menuItemContent: {
+    alignItems: 'flex-end',
+    maxWidth: '100%',
   },
   menuItemText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: theme.colors.textMuted,
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.md,
+    fontFamily: theme.typography.fontFamily.bold,
     textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 0.6,
+    textAlign: 'right',
   },
   menuItemTextActive: {
     color: theme.colors.textPrimary,
   },
+  footerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+  },
+  footerItemText: {
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.fontSize.sm,
+    textAlign: 'right',
+  },
 });
-
