@@ -398,6 +398,7 @@
 			shellPath = /bin/sh;
 			shellScript = (
 				"# Last step before Xcode seals the app: Hermes/FFmpeg often lack a valid Distribution signature after embed.",
+				"# Do NOT set CODE_SIGN_IDENTITY=Apple Distribution in Build Settings with Automatic signing — Xcode flags a conflict.",
 				"# Run after Embed Foundation Extensions so PlugIns exist. Debug/simulator: no-op.",
 				"set -e",
 				"if [ \"${CONFIGURATION}\" != \"Release\" ] || [ \"${PLATFORM_NAME}\" != \"iphoneos\" ]; then exit 0; fi",
@@ -592,7 +593,6 @@
 				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CODE_SIGN_ENTITLEMENTS = TaskLiveActivityWidgetExtension.entitlements;
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 2;
@@ -668,7 +668,6 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = PostHiveCompanion/PostHiveCompanion.entitlements;
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Distribution";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
