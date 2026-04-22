@@ -1,10 +1,9 @@
 import React from 'react';
-import {View, Text, StyleSheet, TouchableOpacity} from 'react-native';
+import {View, Text, StyleSheet, TouchableOpacity, Image} from 'react-native';
 import {
   Bell,
   MessageCircle,
   CheckSquare,
-  Film,
   Folder,
   UserPlus,
   Upload,
@@ -13,13 +12,40 @@ import {
 import {theme} from '../theme';
 import {Notification, NotificationType} from '../lib/types';
 import {formatTimeAgo} from '../lib/utils';
+const DEFAULT_THUMBNAIL = 'https://www.posthive.app/thumbnail/default.png';
 
 interface NotificationItemProps {
   notification: Notification;
   onPress: () => void;
 }
 
-const getNotificationIcon = (type: NotificationType) => {
+function extractDeliverableThumbnail(notification: Notification): string | null {
+  const data = (notification.data || {}) as any;
+  const direct =
+    data.thumbnail_url ||
+    data.deliverable_thumbnail_url ||
+    data.thumbnail ||
+    data.image_url ||
+    data.poster_url;
+
+  if (typeof direct === 'string' && direct.trim().length > 0) {
+    return direct;
+  }
+
+  const nestedDeliverable = data.deliverable || data.payload?.deliverable;
+  const nested =
+    nestedDeliverable?.thumbnail_url ||
+    nestedDeliverable?.thumbnail;
+
+  if (typeof nested === 'string' && nested.trim().length > 0) {
+    return nested;
+  }
+
+  return null;
+}
+
+const getNotificationIcon = (notification: Notification) => {
+  const {type} = notification;
   const iconSize = 20;
   const iconColor = theme.colors.textSecondary;
 
@@ -39,8 +65,16 @@ const getNotificationIcon = (type: NotificationType) => {
     case 'deliverable_due_soon':
     case 'deliverable_overdue':
     case 'version_uploaded':
-    case 'version_signed_off':
-      return <Film size={iconSize} color={iconColor} />;
+    case 'version_signed_off': {
+      const thumbnail = extractDeliverableThumbnail(notification) || DEFAULT_THUMBNAIL;
+      return (
+        <Image
+          source={{uri: thumbnail}}
+          style={{width: iconSize, height: iconSize, opacity: 0.9}}
+          resizeMode="cover"
+        />
+      );
+    }
     case 'project_created':
     case 'project_deadline_approaching':
     case 'project_assigned':
@@ -68,7 +102,7 @@ export function NotificationItem({notification, onPress}: NotificationItemProps)
       onPress={onPress}
       activeOpacity={0.7}>
       <View style={styles.iconContainer}>
-        {getNotificationIcon(notification.type)}
+        {getNotificationIcon(notification)}
       </View>
       <View style={styles.content}>
         <View style={styles.header}>

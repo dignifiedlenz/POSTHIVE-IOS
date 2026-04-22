@@ -13,7 +13,7 @@ import {
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
 import {StackNavigationProp} from '@react-navigation/stack';
-import {Film, ChevronLeft} from 'lucide-react-native';
+import {ChevronLeft} from 'lucide-react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {theme} from '../../theme';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
@@ -26,6 +26,7 @@ type NavigationProp = StackNavigationProp<ReviewStackParamList, 'SeriesList'>;
 
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
 const CARD_HEIGHT = 88;
+const DEFAULT_THUMBNAIL = 'https://www.posthive.app/thumbnail/default.png';
 
 interface SeriesCardProps {
   series: Series;
@@ -46,7 +47,7 @@ function SeriesCard({series, onPress}: SeriesCardProps) {
         />
       ) : (
         <View style={styles.placeholderBackground}>
-          <Film size={28} color="rgba(255,255,255,0.15)" />
+          <Image source={{uri: DEFAULT_THUMBNAIL}} style={styles.defaultThumb} resizeMode="cover" />
         </View>
       )}
       <LinearGradient
@@ -140,7 +141,7 @@ export function SeriesListScreen() {
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <Film size={40} color={theme.colors.textMuted} />
+            <Image source={{uri: DEFAULT_THUMBNAIL}} style={styles.emptyThumb} resizeMode="cover" />
             <Text style={styles.emptyTitle}>NO SERIES</Text>
             <Text style={styles.emptySubtitle}>
               Series will appear here when created in projects
@@ -231,6 +232,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  defaultThumb: {
+    width: '100%',
+    height: '100%',
+    opacity: 0.9,
+  },
   gradientOverlay: {
     ...StyleSheet.absoluteFillObject,
   },
@@ -241,8 +247,9 @@ const styles = StyleSheet.create({
   },
   seriesName: {
     color: '#FFFFFF',
-    fontSize: 15,
-    fontFamily: theme.typography.fontFamily.semibold,
+    fontSize: 17,
+    fontFamily: theme.typography.fontFamily.bold,
+    fontWeight: '700',
   },
   itemCount: {
     color: 'rgba(255, 255, 255, 0.5)',
@@ -261,6 +268,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderStyle: 'dashed',
     borderColor: theme.colors.borderHover,
+  },
+  emptyThumb: {
+    width: 56,
+    height: 56,
+    opacity: 0.85,
   },
   emptyTitle: {
     color: theme.colors.textPrimary,

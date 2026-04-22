@@ -227,6 +227,7 @@ const styles = StyleSheet.create({
   },
   text: {
     fontSize: theme.typography.fontSize.xs, // text-xs
+    fontFamily: theme.typography.fontFamily.semibold,
     fontWeight: '600',
     letterSpacing: 2, // tracking-[0.35em] approximation
   },

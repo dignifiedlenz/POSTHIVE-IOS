@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
-import {Bell, CheckCheck} from 'lucide-react-native';
+import {Bell, CheckCheck, ChevronLeft} from 'lucide-react-native';
 import {useNavigation} from '@react-navigation/native';
 import {theme} from '../../theme';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
@@ -20,6 +20,7 @@ import {Notification} from '../../lib/types';
 
 export function NotificationsScreen() {
   const navigation = useNavigation();
+  const canGoBack = navigation.canGoBack();
   const {user, currentWorkspace} = useAuth();
   const {
     notifications,
@@ -44,53 +45,50 @@ export function NotificationsScreen() {
       // Navigate based on notification type
       const {type, deliverable_id, version_id, comment_id, todo_id, project_id} = notification;
       
-      // Comment notifications - go to deliverable with version and comment context
+      // Comment notifications - go to deliverable with version and comment context.
+      // DeliverableReview is now a root-level screen (above the tab navigator) so it presents
+      // over the native iOS tab bar instead of being constrained inside it.
       if (type.startsWith('comment_') && deliverable_id) {
-        navigation.navigate('ReviewTab' as never, {
-          screen: 'DeliverableReview',
-          params: {
-            deliverableId: deliverable_id,
-            versionId: version_id,
-            commentId: comment_id,
-          },
-        } as never);
+        (navigation as any).navigate('DeliverableReview', {
+          deliverableId: deliverable_id,
+          versionId: version_id,
+          commentId: comment_id,
+        });
         return;
       }
-      
-      // Version notifications - go to deliverable with specific version
+
       if ((type === 'version_uploaded' || type === 'version_signed_off') && deliverable_id) {
-        navigation.navigate('ReviewTab' as never, {
-          screen: 'DeliverableReview',
-          params: {
-            deliverableId: deliverable_id,
-            versionId: version_id,
-          },
-        } as never);
+        (navigation as any).navigate('DeliverableReview', {
+          deliverableId: deliverable_id,
+          versionId: version_id,
+        });
         return;
       }
-      
-      // Deliverable notifications - go to deliverable
+
       if (deliverable_id) {
-        navigation.navigate('ReviewTab' as never, {
-          screen: 'DeliverableReview',
-          params: {deliverableId: deliverable_id},
-        } as never);
+        (navigation as any).navigate('DeliverableReview', {deliverableId: deliverable_id});
         return;
       }
       
-      // Todo notifications - go to Tasks tab
+      // Todo notifications - productivity home
       if (todo_id) {
-        navigation.navigate('TasksTab' as never);
+        (navigation as any).navigate('MainTabs', {
+          screen: 'Home',
+          params: {screen: 'Dashboard'},
+        });
         return;
       }
       
       // Project notifications - go to project deliverables
       if (project_id) {
         const projectName = (notification.data?.project_name as string) || 'Project';
-        navigation.navigate('ReviewTab' as never, {
-          screen: 'ProjectDeliverables',
-          params: {projectId: project_id, projectName},
-        } as never);
+        (navigation as any).navigate('MainTabs', {
+          screen: 'Home',
+          params: {
+            screen: 'ProjectDeliverables',
+            params: {projectId: project_id, projectName},
+          },
+        });
         return;
       }
     },
@@ -112,18 +110,32 @@ export function NotificationsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       {/* Header with section label and mark all button */}
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <Text style={styles.sectionLabel}>NOTIFICATIONS</Text>
-          {unreadCount > 0 && (
-            <View style={styles.unreadBadge}>
-              <Text style={styles.unreadBadgeText}>{unreadCount}</Text>
-            </View>
-          )}
+        {canGoBack ? (
+          <TouchableOpacity
+            style={styles.headerBack}
+            onPress={() => navigation.goBack()}
+            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+            accessibilityRole="button"
+            accessibilityLabel="Back">
+            <ChevronLeft size={24} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.headerBackPlaceholder} />
+        )}
+        <View style={styles.headerCenter}>
+          <View style={styles.headerLeft}>
+            <Text style={styles.sectionLabel}>NOTIFICATIONS</Text>
+            {unreadCount > 0 && (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadBadgeText}>{unreadCount}</Text>
+              </View>
+            )}
+          </View>
         </View>
-        {unreadCount > 0 && (
+        {unreadCount > 0 ? (
           <TouchableOpacity
             style={styles.markAllButton}
             onPress={markAllSeen}
@@ -131,6 +143,8 @@ export function NotificationsScreen() {
             <CheckCheck size={14} color={theme.colors.textMuted} />
             <Text style={styles.markAllText}>MARK ALL READ</Text>
           </TouchableOpacity>
+        ) : (
+          <View style={styles.markAllPlaceholder} />
         )}
       </View>
 
@@ -174,17 +188,35 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.md,
+    paddingHorizontal: theme.spacing.sm,
     paddingTop: theme.spacing.md,
     paddingBottom: theme.spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
+    gap: theme.spacing.xs,
+  },
+  headerBack: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerBackPlaceholder: {
+    width: 40,
+    height: 40,
+  },
+  headerCenter: {
+    flex: 1,
+    minWidth: 0,
   },
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing.sm,
+  },
+  markAllPlaceholder: {
+    width: 40,
+    height: 40,
   },
   sectionLabel: {
     color: theme.colors.textMuted,

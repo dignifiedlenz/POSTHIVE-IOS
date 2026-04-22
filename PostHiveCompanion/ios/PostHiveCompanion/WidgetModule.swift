@@ -26,14 +26,20 @@ class WidgetModule: NSObject {
     
     @objc
     func updateUpcomingItems(_ items: [[String: Any]]) {
-        guard let defaults = userDefaults else { return }
-        
+        guard let defaults = userDefaults else {
+            print("WidgetModule: updateUpcomingItems - no UserDefaults available")
+            return
+        }
+
+        print("WidgetModule: updateUpcomingItems received \(items.count) raw items")
+
         do {
             // Convert dictionaries to our data model
             let upcomingItems: [UpcomingItemData] = items.compactMap { dict in
                 guard let id = dict["id"] as? String,
                       let title = dict["title"] as? String,
                       let typeString = dict["type"] as? String else {
+                    print("WidgetModule: dropping upcoming item, missing id/title/type: \(dict)")
                     return nil
                 }
                 
@@ -60,7 +66,9 @@ class WidgetModule: NSObject {
             let data = try encoder.encode(upcomingItems)
             defaults.set(data, forKey: "widgetUpcomingItems")
             defaults.synchronize()
-            
+
+            print("WidgetModule: Saved \(upcomingItems.count) upcoming items to widget (data size: \(data.count) bytes)")
+
             // Refresh widgets
             WidgetCenter.shared.reloadTimelines(ofKind: "PostHiveUpcomingWidget")
         } catch {
@@ -397,6 +405,44 @@ class WidgetModule: NSObject {
             print("WidgetModule: Failed to encode transfer: \(error)")
         }
     }
+
+    @objc
+    func updateRecentTransfers(_ transfers: [[String: Any]]) {
+        guard let defaults = userDefaults else { return }
+
+        do {
+            let recentTransfers: [RecentTransferData] = transfers.compactMap { dict in
+                guard let id = dict["id"] as? String,
+                      let fileName = dict["fileName"] as? String else {
+                    return nil
+                }
+
+                var completedAt = Date()
+                if let dateString = dict["completedAt"] as? String {
+                    let formatter = ISO8601DateFormatter()
+                    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                    completedAt = formatter.date(from: dateString) ?? ISO8601DateFormatter().date(from: dateString) ?? Date()
+                }
+
+                return RecentTransferData(
+                    id: id,
+                    fileName: fileName,
+                    isUpload: dict["isUpload"] as? Bool ?? false,
+                    completedAt: completedAt
+                )
+            }
+
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(recentTransfers)
+            defaults.set(data, forKey: "widgetRecentTransfers")
+            defaults.synchronize()
+
+            WidgetCenter.shared.reloadTimelines(ofKind: "PostHiveTransferWidget")
+        } catch {
+            print("WidgetModule: Failed to encode recent transfers: \(error)")
+        }
+    }
     
     // MARK: - Clear Transfer (when complete)
     
@@ -578,6 +624,13 @@ private struct TransferProgressData: Codable {
     var totalBytes: Int64
     var isUpload: Bool
     var startedAt: Date
+}
+
+private struct RecentTransferData: Codable {
+    var id: String
+    var fileName: String
+    var isUpload: Bool
+    var completedAt: Date
 }
 
 private struct ActivityItemData: Codable {

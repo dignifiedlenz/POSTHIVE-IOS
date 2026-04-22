@@ -1,6 +1,5 @@
 import React from 'react';
 import {View, StyleSheet, TouchableOpacity} from 'react-native';
-import {Menu} from 'lucide-react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import {theme} from '../theme';
 
@@ -24,7 +23,10 @@ export function LandscapeMenuButton({onPress}: LandscapeMenuButtonProps) {
         onPress={onPress}
         activeOpacity={0.7}
         hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-        <Menu size={24} color={theme.colors.textPrimary} />
+        <View style={styles.icon}>
+          <View style={styles.barLong} />
+          <View style={styles.barShort} />
+        </View>
       </TouchableOpacity>
     </View>
   );
@@ -53,6 +55,21 @@ const styles = StyleSheet.create({
     },
     shadowOpacity: 0.1,
     shadowRadius: 4,
+  },
+  icon: {
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  barLong: {
+    width: 18,
+    height: 2,
+    backgroundColor: theme.colors.textPrimary,
+  },
+  barShort: {
+    width: 12,
+    height: 2,
+    backgroundColor: theme.colors.textPrimary,
   },
 });
 

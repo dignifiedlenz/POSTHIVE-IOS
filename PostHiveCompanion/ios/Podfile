@@ -5,6 +5,8 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
+require File.join(File.dirname(`node --print "require.resolve('expo/package.json')"`), "scripts/autolinking")
+
 platform :ios, min_ios_version_supported
 prepare_react_native_project!
 
@@ -16,6 +18,7 @@ end
 
 target 'PostHiveCompanion' do
   config = use_native_modules!
+  use_expo_modules!
 
   use_react_native!(
     :path => config[:reactNativePath],
@@ -40,6 +43,13 @@ target 'PostHiveCompanion' do
         build_config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
         build_config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
         build_config.build_settings['CODE_SIGN_IDENTITY'] = ''
+        
+        # Fix react-native-document-picker: add ReactCodegen header path for rndocumentpicker.h (New Architecture)
+        if target.name == 'react-native-document-picker'
+          codegen_path = File.join(Pod::Config.instance.installation_root, 'build/generated/ios/ReactCodegen')
+          build_config.build_settings['HEADER_SEARCH_PATHS'] ||= '$(inherited)'
+          build_config.build_settings['HEADER_SEARCH_PATHS'] << " \"#{codegen_path}\""
+        end
       end
     end
   end

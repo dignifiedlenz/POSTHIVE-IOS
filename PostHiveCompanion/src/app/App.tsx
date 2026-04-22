@@ -1,35 +1,50 @@
-import React, {useState, useEffect, useRef, useCallback, useMemo} from 'react';
+import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   StatusBar,
   View,
   StyleSheet,
-  Text,
   Animated,
   Easing,
   Dimensions,
   Linking,
   Platform,
-  ActivityIndicator,
 } from 'react-native';
-import {NavigationContainer} from '@react-navigation/native';
+import {createSessionFromUrl} from '../lib/supabase';
+import {
+  NavigationContainer,
+  type NavigatorScreenParams,
+} from '@react-navigation/native';
 import {createStackNavigator} from '@react-navigation/stack';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
-import {SafeAreaProvider} from 'react-native-safe-area-context';
+import {createNativeBottomTabNavigator} from '@react-navigation/bottom-tabs/unstable';
+import {SafeAreaProvider, useSafeAreaInsets} from 'react-native-safe-area-context';
+import LinearGradient from 'react-native-linear-gradient';
 import {GestureHandlerRootView} from 'react-native-gesture-handler';
-import {LayoutDashboard, Calendar, Folder, User} from 'lucide-react-native';
-import {theme} from '../theme';
+import ReanimatedDrawerLayout, {
+  DrawerPosition,
+  DrawerType,
+  type DrawerLayoutMethods,
+} from 'react-native-gesture-handler/ReanimatedDrawerLayout';
+import Reanimated, {
+  Extrapolation,
+  interpolate,
+  useAnimatedStyle,
+  type SharedValue,
+} from 'react-native-reanimated';
 import {useAuthState, AuthContext} from '../hooks/useAuth';
-import {useOrientation} from '../hooks/useOrientation';
-import {SidebarMenu} from '../components/SidebarMenu';
-import {LandscapeMenuButton} from '../components/LandscapeMenuButton';
-import {CustomTabBar} from '../components/CustomTabBar';
-import {TabBarProvider} from '../contexts/TabBarContext';
-import {HoldToTalkOverlay} from '../components/HoldToTalkOverlay';
-import {NoisyWaveBackground} from '../components/NoisyWaveBackground';
+import {SidebarDrawerProvider} from '../contexts/SidebarDrawerContext';
+import {SidebarMenu, SIDEBAR_WIDTH} from '../components/SidebarMenu';
+import {MainAppTopBar} from '../components/MainAppTopBar';
+import {MainFloatingCreateFab} from '../components/MainFloatingCreateFab';
+import {TabSwipeWrapper} from '../components/TabSwipeWrapper';
+import {TabBarProvider, useTabBar} from '../contexts/TabBarContext';
+import {theme} from '../theme';
+import {MessageCircle, Home, Film, Layers, Calendar as CalendarGlyph} from 'lucide-react-native';
 
 // Screens
-import {LoginScreen} from '../screens/auth/LoginScreen';
+import {AuthWelcomeScreen} from '../screens/auth/AuthWelcomeScreen';
 import {WorkspaceDropdownModal} from '../components/WorkspaceDropdownModal';
+import {AuthWebViewModal} from '../components/AuthWebViewModal';
 import {WelcomeScreen} from '../screens/auth/WelcomeScreen';
 import {DashboardScreen} from '../screens/dashboard/DashboardScreen';
 import {CreationFlowScreen} from '../screens/creation/CreationFlowScreen';
@@ -38,11 +53,16 @@ import {ProjectsScreen} from '../screens/projects/ProjectsScreen';
 import {ProjectDeliverablesScreen} from '../screens/projects/ProjectDeliverablesScreen';
 import {SeriesItemsScreen} from '../screens/series/SeriesItemsScreen';
 import {SeriesListScreen} from '../screens/series/SeriesListScreen';
+import {MenuPlaceholderScreen} from '../screens/menu/MenuPlaceholderScreen';
 import {ProfileScreen} from '../screens/profile/ProfileScreen';
 import {NotificationSettingsScreen} from '../screens/settings/NotificationSettingsScreen';
 import {TransferHistoryScreen} from '../screens/transfer/TransferHistoryScreen';
 import {TransferDetailScreen} from '../screens/transfer/TransferDetailScreen';
 import {CalendarScreen} from '../screens/calendar/CalendarScreen';
+import {DriveExplorerScreen} from '../screens/drive/DriveExplorerScreen';
+import {NotificationsScreen} from '../screens/notifications/NotificationsScreen';
+import {RecentDeliverablesScreen} from '../screens/deliverables/RecentDeliverablesScreen';
+import {AssistantChatScreen} from '../screens/assistant/AssistantChatScreen';
 
 // Push Notifications
 import {setupBackgroundHandler, usePushNotifications, setupBackgroundRefresh} from '../hooks';
@@ -58,113 +78,485 @@ export type RootStackParamList = {
   Main: undefined;
 };
 
-export type DashboardStackParamList = {
-  DashboardMain: {openNotifications?: boolean};
-  CreateTodo: undefined;
-  DeliverableReview: {deliverableId: string; versionId?: string; commentId?: string};
-};
-
-export type ReviewStackParamList = {
-  ProjectsList: undefined;
+/** Dashboard hub + flows that start from home (reviews opened from dashboard, etc.). */
+export type HomeStackParamList = {
+  Dashboard: {openNotifications?: boolean} | undefined;
+  CreateTodo:
+    | {
+        initialCreationType?: 'project' | 'deliverable' | 'task' | 'event';
+      }
+    | undefined;
+  ProjectDeliverables: {
+    projectId: string;
+    projectName: string;
+    clientName?: string;
+    thumbnailUrl?: string;
+  };
   SeriesList: undefined;
-  ProjectDeliverables: {projectId: string; projectName: string; clientName?: string; thumbnailUrl?: string};
-  SeriesItems: {seriesId: string; seriesName: string; seriesDescription?: string; thumbnailUrl?: string; itemCount: number};
+  SeriesItems: {
+    seriesId: string;
+    seriesName: string;
+    seriesDescription?: string;
+    thumbnailUrl?: string;
+    itemCount: number;
+  };
+};
+
+export type AssistantStackParamList = {
+  AssistantChat: undefined;
+};
+
+export type DeliverablesStackParamList = {
+  RecentDeliverables: undefined;
+};
+
+export type ProjectsStackParamList = {
+  Projects: undefined;
+  ProjectDeliverables: {
+    projectId: string;
+    projectName: string;
+    clientName?: string;
+    thumbnailUrl?: string;
+  };
+  SeriesList: undefined;
+  SeriesItems: {
+    seriesId: string;
+    seriesName: string;
+    seriesDescription?: string;
+    thumbnailUrl?: string;
+    itemCount: number;
+  };
+};
+
+export type CalendarStackParamList = {
+  Calendar: {date?: string; scrollToTime?: string} | undefined;
+};
+
+/** Native tabs: one stack per primary surface (no shared PagerView). */
+export type MainTabParamList = {
+  Assistant: NavigatorScreenParams<AssistantStackParamList> | undefined;
+  Home: NavigatorScreenParams<HomeStackParamList> | undefined;
+  Deliverables: NavigatorScreenParams<DeliverablesStackParamList> | undefined;
+  Projects: NavigatorScreenParams<ProjectsStackParamList> | undefined;
+  Calendar: NavigatorScreenParams<CalendarStackParamList> | undefined;
+};
+
+export type AuthenticatedRootParamList = {
+  MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
+  Menu: NavigatorScreenParams<MenuStackParamList> | undefined;
+  /**
+   * DeliverableReview lives at the root level (above the tab navigator) so it presents
+   * over the iOS native bottom tab bar. The unstable native bottom tab navigator does not
+   * expose a per-screen "hide tab bar" option, so the only way to give the review a true
+   * full-screen surface is to escape the tab navigator entirely.
+   */
   DeliverableReview: {deliverableId: string; versionId?: string; commentId?: string};
 };
 
-export type ProfileStackParamList = {
-  ProfileMain: undefined;
+/** @deprecated Use HomeStackParamList */
+export type MainStackParamList = HomeStackParamList;
+
+/** @deprecated Use HomeStackParamList */
+export type DashboardStackParamList = HomeStackParamList;
+
+/** @deprecated Use DeliverablesStackParamList */
+export type RecentDeliverablesStackParamList = DeliverablesStackParamList;
+
+/**
+ * @deprecated Prefer `HomeStackParamList` / `ProjectsStackParamList` / `DeliverablesStackParamList`.
+ * Kept for screens that still import `ReviewStackParamList`.
+ */
+export type ReviewStackParamList = HomeStackParamList;
+
+export type MenuStackParamList = {
+  MenuHome: undefined;
+  Profile: undefined;
   NotificationSettings: undefined;
   TransferHistory: undefined;
   TransferDetail: {transfer: import('../lib/api').TransferOperation};
+  DriveExplorer: undefined;
+  Notifications: undefined;
 };
 
-export type MainTabParamList = {
-  DashboardTab: undefined;
-  CalendarTab: {date?: string; scrollToTime?: string};
-  ReviewTab: undefined;
-  ProfileTab: undefined;
-};
+const HomeStack = createStackNavigator<HomeStackParamList>();
+const AssistantStack = createStackNavigator<AssistantStackParamList>();
+const DeliverablesStack = createStackNavigator<DeliverablesStackParamList>();
+const ProjectsStack = createStackNavigator<ProjectsStackParamList>();
+const CalendarStack = createStackNavigator<CalendarStackParamList>();
+const MenuStack = createStackNavigator<MenuStackParamList>();
+const RootStack = createStackNavigator<AuthenticatedRootParamList>();
+const NativeTab = createNativeBottomTabNavigator<MainTabParamList>();
+const JsTab = createBottomTabNavigator<MainTabParamList>();
 
-const DashboardStack = createStackNavigator<DashboardStackParamList>();
-const ReviewStack = createStackNavigator<ReviewStackParamList>();
-const ProfileStack = createStackNavigator<ProfileStackParamList>();
-const Tab = createBottomTabNavigator<MainTabParamList>();
+/** Space below floating top bar (safe area + bar chrome); keep in sync with MainAppTopBar layout */
+const MAIN_FLOATING_TOP_BAR_EXTRA = 64;
 
-// Wrapper components to handle the stack navigators within tabs
-function DashboardStackNavigator() {
+function MenuStackChrome({children}: {children: React.ReactNode}) {
+  const insets = useSafeAreaInsets();
+  const bottomScrimHeight = Math.max(insets.bottom, 0) + 110;
   return (
-    <DashboardStack.Navigator 
+    <View style={styles.mainPagerRoot}>
+      <View style={[styles.mainPagerContent, {paddingTop: insets.top + MAIN_FLOATING_TOP_BAR_EXTRA}]}>
+        {children}
+      </View>
+      <LinearGradient
+        pointerEvents="none"
+        colors={[
+          'rgba(0,0,0,0)',
+          'rgba(0,0,0,0.55)',
+          'rgba(0,0,0,0.92)',
+          'rgba(0,0,0,0.96)',
+        ]}
+        locations={[0, 0.55, 0.85, 1]}
+        style={[styles.bottomNavScrim, {height: bottomScrimHeight}]}
+      />
+      <View style={styles.mainPagerTopOverlay} pointerEvents="box-none">
+        <MainAppTopBar />
+      </View>
+    </View>
+  );
+}
+
+function AuthenticatedChrome({children}: {children: React.ReactNode}) {
+  const insets = useSafeAreaInsets();
+  // Height of the bottom scrim: covers the system tab bar area + a soft fade
+  // above it so content doesn't collide visually with the nav icons.
+  const bottomScrimHeight = Math.max(insets.bottom, 0) + 110;
+  return (
+    <View style={styles.mainPagerRoot}>
+      <View style={[styles.mainPagerContent, {paddingTop: insets.top + MAIN_FLOATING_TOP_BAR_EXTRA}]}>
+        <TabSwipeWrapper>{children}</TabSwipeWrapper>
+      </View>
+      <LinearGradient
+        pointerEvents="none"
+        colors={[
+          'rgba(0,0,0,0)',
+          'rgba(0,0,0,0.55)',
+          'rgba(0,0,0,0.92)',
+          'rgba(0,0,0,0.96)',
+        ]}
+        locations={[0, 0.55, 0.85, 1]}
+        style={[styles.bottomNavScrim, {height: bottomScrimHeight}]}
+      />
+      <View style={styles.mainPagerTopOverlay} pointerEvents="box-none">
+        <MainAppTopBar />
+      </View>
+    </View>
+  );
+}
+
+function AssistantChatRoot() {
+  return (
+    <AuthenticatedChrome>
+      <AssistantChatScreen />
+    </AuthenticatedChrome>
+  );
+}
+
+function DashboardRoot() {
+  return (
+    <AuthenticatedChrome>
+      <DashboardScreen />
+    </AuthenticatedChrome>
+  );
+}
+
+function RecentDeliverablesRoot() {
+  return (
+    <AuthenticatedChrome>
+      <RecentDeliverablesScreen />
+    </AuthenticatedChrome>
+  );
+}
+
+function ProjectsRoot() {
+  return (
+    <AuthenticatedChrome>
+      <ProjectsScreen />
+    </AuthenticatedChrome>
+  );
+}
+
+function CalendarRoot() {
+  return (
+    <AuthenticatedChrome>
+      <CalendarScreen />
+    </AuthenticatedChrome>
+  );
+}
+
+function DriveExplorerRoot() {
+  return (
+    <MenuStackChrome>
+      <DriveExplorerScreen />
+    </MenuStackChrome>
+  );
+}
+
+function TransferHistoryRoot() {
+  return (
+    <MenuStackChrome>
+      <TransferHistoryScreen />
+    </MenuStackChrome>
+  );
+}
+
+function TransferDetailRoot() {
+  return (
+    <MenuStackChrome>
+      <TransferDetailScreen />
+    </MenuStackChrome>
+  );
+}
+
+function NotificationsMenuRoot() {
+  return (
+    <MenuStackChrome>
+      <NotificationsScreen />
+    </MenuStackChrome>
+  );
+}
+
+function AssistantStackNavigator() {
+  return (
+    <AssistantStack.Navigator
+      initialRouteName="AssistantChat"
       screenOptions={{
         headerShown: false,
         cardStyle: {backgroundColor: 'transparent'},
+        gestureEnabled: true,
       }}>
-      <DashboardStack.Screen name="DashboardMain" component={DashboardScreen} />
-      <DashboardStack.Screen
+      <AssistantStack.Screen name="AssistantChat" component={AssistantChatRoot} />
+    </AssistantStack.Navigator>
+  );
+}
+
+function HomeStackNavigator() {
+  return (
+    <HomeStack.Navigator
+      initialRouteName="Dashboard"
+      screenOptions={{
+        headerShown: false,
+        cardStyle: {backgroundColor: 'transparent'},
+        gestureEnabled: true,
+      }}>
+      <HomeStack.Screen name="Dashboard" component={DashboardRoot} />
+      <HomeStack.Screen
         name="CreateTodo"
         component={CreationFlowScreen}
-        options={{presentation: 'fullScreenModal'}}
+        options={{presentation: 'modal'}}
       />
-      <DashboardStack.Screen
-        name="DeliverableReview"
-        component={DeliverableReviewScreen}
-      />
-    </DashboardStack.Navigator>
+      <HomeStack.Screen name="ProjectDeliverables" component={ProjectDeliverablesScreen} />
+      <HomeStack.Screen name="SeriesList" component={SeriesListScreen} />
+      <HomeStack.Screen name="SeriesItems" component={SeriesItemsScreen} />
+    </HomeStack.Navigator>
   );
 }
 
-function ReviewStackNavigator() {
+function DeliverablesStackNavigator() {
   return (
-    <ReviewStack.Navigator 
+    <DeliverablesStack.Navigator
+      initialRouteName="RecentDeliverables"
+      screenOptions={{
+        headerShown: false,
+        cardStyle: {backgroundColor: 'transparent'},
+        gestureEnabled: true,
+      }}>
+      <DeliverablesStack.Screen name="RecentDeliverables" component={RecentDeliverablesRoot} />
+    </DeliverablesStack.Navigator>
+  );
+}
+
+function ProjectsStackNavigator() {
+  return (
+    <ProjectsStack.Navigator
+      initialRouteName="Projects"
+      screenOptions={{
+        headerShown: false,
+        cardStyle: {backgroundColor: 'transparent'},
+        gestureEnabled: true,
+      }}>
+      <ProjectsStack.Screen name="Projects" component={ProjectsRoot} />
+      <ProjectsStack.Screen name="ProjectDeliverables" component={ProjectDeliverablesScreen} />
+      <ProjectsStack.Screen name="SeriesList" component={SeriesListScreen} />
+      <ProjectsStack.Screen name="SeriesItems" component={SeriesItemsScreen} />
+    </ProjectsStack.Navigator>
+  );
+}
+
+function CalendarStackNavigator() {
+  return (
+    <CalendarStack.Navigator
+      initialRouteName="Calendar"
+      screenOptions={{
+        headerShown: false,
+        cardStyle: {backgroundColor: 'transparent'},
+        gestureEnabled: true,
+      }}>
+      <CalendarStack.Screen name="Calendar" component={CalendarRoot} />
+    </CalendarStack.Navigator>
+  );
+}
+
+const nativeTabScreenOptions = {
+  headerShown: false,
+  sceneStyle: {backgroundColor: 'transparent' as const},
+};
+
+function IOSNativeMainTabs() {
+  return (
+    <NativeTab.Navigator initialRouteName="Home" screenOptions={nativeTabScreenOptions}>
+      <NativeTab.Screen
+        name="Assistant"
+        component={AssistantStackNavigator}
+        options={{
+          title: 'Assistant',
+          tabBarLabel: 'Assistant',
+          tabBarIcon: ({focused}) => ({
+            type: 'sfSymbol',
+            name: focused ? 'sparkles' : 'sparkles',
+          }),
+        }}
+      />
+      <NativeTab.Screen
+        name="Home"
+        component={HomeStackNavigator}
+        options={{
+          title: 'Home',
+          tabBarLabel: 'Home',
+          tabBarIcon: ({focused}) => ({
+            type: 'sfSymbol',
+            name: focused ? 'house.fill' : 'house',
+          }),
+        }}
+      />
+      <NativeTab.Screen
+        name="Deliverables"
+        component={DeliverablesStackNavigator}
+        options={{
+          title: 'Deliverables',
+          tabBarLabel: 'Deliverables',
+          tabBarIcon: ({focused}) => ({
+            type: 'sfSymbol',
+            name: focused ? 'play.rectangle.fill' : 'play.rectangle',
+          }),
+        }}
+      />
+      <NativeTab.Screen
+        name="Projects"
+        component={ProjectsStackNavigator}
+        options={{
+          title: 'Projects',
+          tabBarLabel: 'Projects',
+          tabBarIcon: ({focused}) => ({
+            type: 'sfSymbol',
+            name: focused ? 'square.stack.fill' : 'square.stack',
+          }),
+        }}
+      />
+      <NativeTab.Screen
+        name="Calendar"
+        component={CalendarStackNavigator}
+        options={{
+          title: 'Calendar',
+          tabBarLabel: 'Calendar',
+          tabBarIcon: ({focused}) => ({
+            type: 'sfSymbol',
+            name: focused ? 'calendar' : 'calendar',
+          }),
+        }}
+      />
+    </NativeTab.Navigator>
+  );
+}
+
+const androidTabBarTheme = {
+  tabBarActiveTintColor: '#FFFFFF',
+  tabBarInactiveTintColor: 'rgba(255,255,255,0.45)',
+  tabBarStyle: {
+    backgroundColor: '#0A0A0A',
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+};
+
+function AndroidMaterialMainTabs() {
+  return (
+    <JsTab.Navigator initialRouteName="Home" screenOptions={{headerShown: false, ...androidTabBarTheme}}>
+      <JsTab.Screen
+        name="Assistant"
+        component={AssistantStackNavigator}
+        options={{
+          tabBarLabel: 'Assistant',
+          tabBarIcon: ({color, size}) => <MessageCircle size={size ?? 22} color={color} />,
+        }}
+      />
+      <JsTab.Screen
+        name="Home"
+        component={HomeStackNavigator}
+        options={{
+          tabBarLabel: 'Home',
+          tabBarIcon: ({color, size}) => <Home size={size ?? 22} color={color} />,
+        }}
+      />
+      <JsTab.Screen
+        name="Deliverables"
+        component={DeliverablesStackNavigator}
+        options={{
+          tabBarLabel: 'Deliverables',
+          tabBarIcon: ({color, size}) => <Film size={size ?? 22} color={color} />,
+        }}
+      />
+      <JsTab.Screen
+        name="Projects"
+        component={ProjectsStackNavigator}
+        options={{
+          tabBarLabel: 'Projects',
+          tabBarIcon: ({color, size}) => <Layers size={size ?? 22} color={color} />,
+        }}
+      />
+      <JsTab.Screen
+        name="Calendar"
+        component={CalendarStackNavigator}
+        options={{
+          tabBarLabel: 'Calendar',
+          tabBarIcon: ({color, size}) => <CalendarGlyph size={size ?? 22} color={color} />,
+        }}
+      />
+    </JsTab.Navigator>
+  );
+}
+
+function MenuStackNavigator() {
+  return (
+    <MenuStack.Navigator 
       screenOptions={{
         headerShown: false,
         cardStyle: {backgroundColor: 'transparent'},
       }}>
-      <ReviewStack.Screen
-        name="ProjectsList"
-        component={ProjectsScreen}
-      />
-      <ReviewStack.Screen
-        name="SeriesList"
-        component={SeriesListScreen}
-      />
-      <ReviewStack.Screen
-        name="ProjectDeliverables"
-        component={ProjectDeliverablesScreen}
-      />
-      <ReviewStack.Screen
-        name="SeriesItems"
-        component={SeriesItemsScreen}
-      />
-      <ReviewStack.Screen
-        name="DeliverableReview"
-        component={DeliverableReviewScreen}
-      />
-    </ReviewStack.Navigator>
-  );
-}
-
-function ProfileStackNavigator() {
-  return (
-    <ProfileStack.Navigator 
-      screenOptions={{
-        headerShown: false,
-        cardStyle: {backgroundColor: 'transparent'},
-      }}>
-      <ProfileStack.Screen name="ProfileMain" component={ProfileScreen} />
-      <ProfileStack.Screen
+      <MenuStack.Screen name="MenuHome" component={MenuPlaceholderScreen} />
+      <MenuStack.Screen name="Profile" component={ProfileScreen} />
+      <MenuStack.Screen
         name="NotificationSettings"
         component={NotificationSettingsScreen}
       />
-      <ProfileStack.Screen
+      <MenuStack.Screen
         name="TransferHistory"
-        component={TransferHistoryScreen}
+        component={TransferHistoryRoot}
       />
-      <ProfileStack.Screen
+      <MenuStack.Screen
         name="TransferDetail"
-        component={TransferDetailScreen}
+        component={TransferDetailRoot}
       />
-    </ProfileStack.Navigator>
+      <MenuStack.Screen
+        name="DriveExplorer"
+        component={DriveExplorerRoot}
+      />
+      <MenuStack.Screen
+        name="Notifications"
+        component={NotificationsMenuRoot}
+      />
+    </MenuStack.Navigator>
   );
 }
 
@@ -172,18 +564,78 @@ function ProfileStackNavigator() {
 interface AuthenticatedAppProps {
   userId?: string;
   workspaceId?: string;
-  onTabIndexChange?: (index: number) => void;
 }
 
-function AuthenticatedApp({userId, workspaceId, onTabIndexChange}: AuthenticatedAppProps) {
+interface DrawerAnimatedShellProps {
+  drawerProgress?: SharedValue<number>;
+  children: React.ReactNode;
+}
+
+function DrawerAnimatedShell({drawerProgress, children}: DrawerAnimatedShellProps) {
+  const contentStyle = useAnimatedStyle(() => {
+    const progress = drawerProgress?.value ?? 0;
+
+    return {
+      transform: [
+        {
+          translateX: interpolate(progress, [0, 1], [0, -14], Extrapolation.CLAMP),
+        },
+      ],
+    };
+  }, [drawerProgress]);
+
+  const blurStyle = useAnimatedStyle(() => {
+    const progress = drawerProgress?.value ?? 0;
+
+    return {
+      opacity: interpolate(progress, [0, 1], [0, 1], Extrapolation.CLAMP),
+    };
+  }, [drawerProgress]);
+
+  return (
+    <Reanimated.View style={[styles.appContentLayer, contentStyle]}>
+      {children}
+      <Reanimated.View pointerEvents="none" style={[styles.sidebarBackdrop, blurStyle]}>
+        <View style={styles.sidebarDimmer} />
+      </Reanimated.View>
+    </Reanimated.View>
+  );
+}
+
+function AuthenticatedApp({userId, workspaceId}: AuthenticatedAppProps) {
   const navigationRef = useRef<any>(null);
-  const orientation = useOrientation();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [currentRoute, setCurrentRoute] = useState('DashboardTab');
+  const drawerRef = useRef<DrawerLayoutMethods | null>(null);
+  const [currentRoute, setCurrentRoute] = useState('Dashboard');
   const [isNavReady, setIsNavReady] = useState(false);
-  const [currentTabIndex, setCurrentTabIndex] = useState(0);
   const launchDeepLinkHandled = useRef(false);
   const previousWorkspaceId = useRef<string | undefined>(workspaceId);
+  const {pendingVoiceCommand} = useTabBar();
+  const lastRoutedVoiceNonce = useRef(0);
+
+  // Route any committed voice command to the assistant tab so the AssistantChatScreen can
+  // pick it up and submit. We don't consume `pendingVoiceCommand` here — that's the assistant
+  // screen's job after it sends.
+  useEffect(() => {
+    if (!pendingVoiceCommand) return;
+    if (pendingVoiceCommand.nonce === lastRoutedVoiceNonce.current) return;
+    lastRoutedVoiceNonce.current = pendingVoiceCommand.nonce;
+    if (currentRoute === 'AssistantChat') return;
+    navigationRef.current?.navigate('MainTabs', {
+      screen: 'Assistant',
+      params: {screen: 'AssistantChat'},
+    });
+  }, [pendingVoiceCommand, currentRoute]);
+
+  const getActiveRouteName = useCallback((state: any): string => {
+    const route = state?.routes?.[state.index ?? 0];
+    if (!route) {
+      return 'Dashboard';
+    }
+    if (route.state) {
+      return getActiveRouteName(route.state);
+    }
+    return route.name;
+  }, []);
 
   // Initialize push notifications
   usePushNotificationHandler(userId, workspaceId, navigationRef);
@@ -198,28 +650,30 @@ function AuthenticatedApp({userId, workspaceId, onTabIndexChange}: Authenticated
         let handled = true;
         
         if (path === 'activity') {
-          // Navigate to DashboardTab and open notifications
-          navigationRef.current?.navigate('DashboardTab', {
-            screen: 'DashboardMain',
-            params: {openNotifications: true},
+          navigationRef.current?.navigate('MainTabs', {
+            screen: 'Home',
+            params: {screen: 'Dashboard'},
           });
         } else if (path.startsWith('deliverable/')) {
           const deliverableId = path.replace('deliverable/', '');
-          navigationRef.current?.navigate('DashboardTab', {
-            screen: 'DeliverableReview',
-            params: {deliverableId},
-          });
+          navigationRef.current?.navigate('DeliverableReview', {deliverableId});
         } else if (path === 'deliverables') {
-          navigationRef.current?.navigate('ReviewTab');
+          navigationRef.current?.navigate('MainTabs', {
+            screen: 'Deliverables',
+            params: {screen: 'RecentDeliverables'},
+          });
         } else if (path === 'series') {
-          navigationRef.current?.navigate('ReviewTab', {
-            screen: 'SeriesList',
+          navigationRef.current?.navigate('MainTabs', {
+            screen: 'Projects',
+            params: {screen: 'SeriesList'},
           });
         } else if (path === 'calendar') {
-          navigationRef.current?.navigate('CalendarTab');
+          navigationRef.current?.navigate('MainTabs', {
+            screen: 'Calendar',
+            params: {screen: 'Calendar'},
+          });
         } else if (path === 'transfers') {
-          // Navigate to dashboard for transfers
-          navigationRef.current?.navigate('DashboardTab');
+          navigationRef.current?.navigate('Menu', {screen: 'TransferHistory'});
         } else {
           handled = false;
         }
@@ -263,7 +717,7 @@ function AuthenticatedApp({userId, workspaceId, onTabIndexChange}: Authenticated
     if (shouldResetToDashboard) {
       navigationRef.current?.reset({
         index: 0,
-        routes: [{name: 'DashboardTab'}],
+        routes: [{name: 'MainTabs'}],
       });
     }
 
@@ -275,66 +729,90 @@ function AuthenticatedApp({userId, workspaceId, onTabIndexChange}: Authenticated
     const unsubscribe = navigationRef.current?.addListener('state', (e: any) => {
       const state = e.data.state;
       if (state) {
-        const route = state.routes[state.index];
-        if (route?.name) {
-          setCurrentRoute(route.name);
-        }
+        setCurrentRoute(getActiveRouteName(state));
       }
     });
 
     return unsubscribe;
+  }, [getActiveRouteName]);
+
+  const openSidebar = useCallback(() => {
+    drawerRef.current?.openDrawer?.({animationSpeed: 22});
+  }, []);
+
+  const closeSidebar = useCallback(() => {
+    drawerRef.current?.closeDrawer?.({animationSpeed: 22});
   }, []);
 
   return (
     <>
-      {/* Navigation content */}
-      <NavigationContainer 
-        ref={navigationRef}
-        theme={{
-          dark: true,
-          colors: {
-            primary: '#FFFFFF',
-            background: 'transparent',
-            card: 'transparent',
-            text: '#FFFFFF',
-            border: 'transparent',
-            notification: '#FFFFFF',
-          },
-          fonts: {
-            regular: {fontFamily: 'System', fontWeight: '400'},
-            medium: {fontFamily: 'System', fontWeight: '500'},
-            bold: {fontFamily: 'System', fontWeight: '700'},
-            heavy: {fontFamily: 'System', fontWeight: '900'},
-          },
-        }}
-        onReady={() => setIsNavReady(true)}
-        onStateChange={(state) => {
-          if (state) {
-            const route = state.routes[state.index];
-            if (route?.name) {
-              setCurrentRoute(route.name);
-            }
-            // Update tab index for wave animation
-            if (state.index !== undefined) {
-              setCurrentTabIndex(state.index);
-              onTabIndexChange?.(state.index);
-            }
-          }
-        }}>
-        <MainTabs orientation={orientation} onMenuPress={() => setSidebarOpen(true)} />
-        {orientation === 'landscape' && (
-          <>
-            <LandscapeMenuButton onPress={() => setSidebarOpen(true)} />
-            <SidebarMenu
-              isOpen={sidebarOpen}
-              onClose={() => setSidebarOpen(false)}
-              currentRoute={currentRoute}
-            />
-          </>
+      <ReanimatedDrawerLayout
+        ref={drawerRef}
+        drawerWidth={SIDEBAR_WIDTH}
+        drawerPosition={DrawerPosition.RIGHT}
+        drawerType={DrawerType.FRONT}
+        edgeWidth={24}
+        minSwipeDistance={8}
+        overlayColor="transparent"
+        animationSpeed={22}
+        renderNavigationView={() => (
+          <SidebarMenu
+            onClose={closeSidebar}
+            currentRoute={currentRoute}
+            onNavigate={(route, params) => navigationRef.current?.navigate(route, params)}
+          />
+        )}>
+        {(drawerProgress) => (
+          <DrawerAnimatedShell drawerProgress={drawerProgress}>
+            <SidebarDrawerProvider openSidebar={openSidebar}>
+              <NavigationContainer
+                ref={navigationRef}
+                theme={{
+                  dark: true,
+                  colors: {
+                    primary: '#FFFFFF',
+                    background: 'transparent',
+                    card: 'transparent',
+                    text: '#FFFFFF',
+                    border: 'transparent',
+                    notification: '#FFFFFF',
+                  },
+                  fonts: {
+                    regular: {
+                      fontFamily: theme.typography.fontFamily.regular,
+                      fontWeight: '400',
+                    },
+                    medium: {
+                      fontFamily: theme.typography.fontFamily.medium,
+                      fontWeight: '500',
+                    },
+                    bold: {
+                      fontFamily: theme.typography.fontFamily.bold,
+                      fontWeight: '700',
+                    },
+                    heavy: {
+                      fontFamily: theme.typography.fontFamily.bold,
+                      fontWeight: '700',
+                    },
+                  },
+                }}
+                onReady={() => setIsNavReady(true)}
+                onStateChange={(state) => {
+                  if (state) {
+                    setCurrentRoute(getActiveRouteName(state));
+                  }
+                }}>
+                <View style={styles.authenticatedNavWrap}>
+                  <AuthenticatedRoot />
+                  {currentRoute === 'AssistantChat' || currentRoute === 'Assistant' ? null : (
+                    <MainFloatingCreateFab />
+                  )}
+                </View>
+              </NavigationContainer>
+            </SidebarDrawerProvider>
+          </DrawerAnimatedShell>
         )}
-      </NavigationContainer>
-      {/* Hold-to-Talk Overlay */}
-      <HoldToTalkOverlay />
+      </ReanimatedDrawerLayout>
     </>
   );
 }
@@ -346,24 +824,26 @@ function usePushNotificationHandler(
   navigationRef: React.RefObject<any>,
 ) {
   const handleNotificationPress = useCallback((data: Record<string, unknown>) => {
-    // Navigate based on notification data
     if (data.deliverable_id) {
-      navigationRef.current?.navigate('DashboardTab', {
-        screen: 'DeliverableReview',
-        params: {
-          deliverableId: data.deliverable_id,
-          versionId: data.version_id as string | undefined,
-          commentId: data.comment_id as string | undefined,
-        },
+      navigationRef.current?.navigate('DeliverableReview', {
+        deliverableId: data.deliverable_id as string,
+        versionId: data.version_id as string | undefined,
+        commentId: data.comment_id as string | undefined,
       });
     } else if (data.todo_id) {
-      navigationRef.current?.navigate('DashboardTab');
+      navigationRef.current?.navigate('MainTabs', {
+        screen: 'Home',
+        params: {screen: 'Dashboard'},
+      });
     } else if (data.project_id) {
-      navigationRef.current?.navigate('ReviewTab', {
-        screen: 'ProjectDeliverables',
+      navigationRef.current?.navigate('MainTabs', {
+        screen: 'Projects',
         params: {
-          projectId: data.project_id,
-          projectName: (data.project_name as string) || 'Project',
+          screen: 'ProjectDeliverables',
+          params: {
+            projectId: data.project_id as string,
+            projectName: (data.project_name as string) || 'Project',
+          },
         },
       });
     }
@@ -377,207 +857,102 @@ function usePushNotificationHandler(
   });
 }
 
-interface MainTabsProps {
-  orientation: 'portrait' | 'landscape';
-  onMenuPress: () => void;
-}
-
-function MainTabs({orientation, onMenuPress}: MainTabsProps) {
-  const isLandscape = orientation === 'landscape';
-
+function AuthenticatedRoot() {
   return (
-    <Tab.Navigator
-      initialRouteName="DashboardTab"
-      tabBar={(props) => (isLandscape ? null : <CustomTabBar {...props} />)}
+    <RootStack.Navigator
       screenOptions={{
         headerShown: false,
-        sceneStyle: {backgroundColor: 'transparent'},
+        cardStyle: {backgroundColor: 'transparent'},
       }}>
-      <Tab.Screen
-        name="DashboardTab"
-        component={DashboardStackNavigator}
-        options={{
-          tabBarLabel: 'Dashboard',
-          tabBarIcon: ({color, size}) => (
-            <LayoutDashboard size={size} color={color} />
-          ),
-        }}
+      <RootStack.Screen name="MainTabs" component={MainTabs} />
+      <RootStack.Screen name="Menu" component={MenuStackNavigator} />
+      <RootStack.Screen
+        name="DeliverableReview"
+        component={DeliverableReviewScreen}
+        options={{presentation: 'card'}}
       />
-      <Tab.Screen
-        name="ReviewTab"
-        component={ReviewStackNavigator}
-        options={{
-          tabBarLabel: 'Projects',
-          tabBarIcon: ({color, size}) => (
-            <Folder size={size} color={color} />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="CalendarTab"
-        component={CalendarScreen}
-        options={{
-          tabBarLabel: 'Calendar',
-          tabBarIcon: ({color, size}) => (
-            <Calendar size={size} color={color} />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="ProfileTab"
-        component={ProfileStackNavigator}
-        options={{
-          tabBarLabel: 'Profile',
-          tabBarIcon: ({color, size}) => (
-            <User size={size} color={color} />
-          ),
-        }}
-      />
-    </Tab.Navigator>
+    </RootStack.Navigator>
   );
 }
 
-// Animated Splash Overlay
-interface SplashOverlayProps {
-  isLoading: boolean;
-  onComplete: () => void;
-}
-
-function SplashOverlay({isLoading, onComplete}: SplashOverlayProps) {
-  const logoTranslateX = useRef(new Animated.Value(0)).current;
-  const logoOpacity = useRef(new Animated.Value(1)).current;
-  const [isVisible, setIsVisible] = useState(true);
-
-  useEffect(() => {
-    if (!isLoading && isVisible) {
-      // Delay before starting animation
-      const timer = setTimeout(() => {
-        // Slide left and fade out
-        Animated.parallel([
-          Animated.timing(logoTranslateX, {
-            toValue: -SCREEN_WIDTH,
-            duration: 600,
-            useNativeDriver: true,
-            easing: Easing.in(Easing.cubic),
-          }),
-          Animated.timing(logoOpacity, {
-            toValue: 0,
-            duration: 500,
-            delay: 100,
-            useNativeDriver: true,
-            easing: Easing.out(Easing.ease),
-          }),
-        ]).start(() => {
-          setIsVisible(false);
-          onComplete();
-        });
-      }, 300);
-
-      return () => clearTimeout(timer);
-    }
-  }, [isLoading, isVisible, logoTranslateX, logoOpacity, onComplete]);
-
-  if (!isVisible) {
-    return null;
-  }
-
+function MainTabs() {
   return (
-    <View style={styles.splashOverlay} pointerEvents={isLoading ? 'auto' : 'none'}>
-      {/* Animated logo */}
-      <Animated.View
-        style={[
-          styles.logoContainer,
-          {
-            opacity: logoOpacity,
-            transform: [
-              {translateX: logoTranslateX},
-            ],
-          },
-        ]}>
-        <Text style={styles.logo}>POSTHIVE</Text>
-        {isLoading && (
-          <ActivityIndicator
-            size="large"
-            color={theme.colors.textPrimary}
-            style={styles.splashSpinner}
-          />
-        )}
-      </Animated.View>
+    <View style={styles.mainTabsWrap}>
+      {Platform.OS === 'ios' ? <IOSNativeMainTabs /> : <AndroidMaterialMainTabs />}
     </View>
   );
 }
 
-// Auth Screen with animated content
+// Auth Screen - welcome with Get Started opening auth directly
 interface AuthScreenProps {
   authState: ReturnType<typeof useAuthState>;
   animationReady: boolean;
 }
 
 function AuthScreen({authState, animationReady}: AuthScreenProps) {
-  const loginOpacity = useRef(new Animated.Value(0)).current;
-  const loginTranslateX = useRef(new Animated.Value(SCREEN_WIDTH)).current;
+  const welcomeOpacity = useRef(new Animated.Value(0)).current;
 
-  // Initial animation - login slides in from right
+  // Fade in welcome once ready
   useEffect(() => {
     if (animationReady) {
-      Animated.parallel([
-        Animated.timing(loginOpacity, {
-          toValue: 1,
-          duration: 600,
-          delay: 200,
-          useNativeDriver: true,
-          easing: Easing.out(Easing.cubic),
-        }),
-        Animated.timing(loginTranslateX, {
-          toValue: 0,
-          duration: 600,
-          delay: 200,
-          useNativeDriver: true,
-          easing: Easing.out(Easing.cubic),
-        }),
-      ]).start();
+      Animated.timing(welcomeOpacity, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+        easing: Easing.out(Easing.cubic),
+      }).start();
     }
-  }, [animationReady, loginOpacity, loginTranslateX]);
+  }, [animationReady, welcomeOpacity]);
 
-  // Show login screen
   return (
     <Animated.View
       style={[
         styles.authContainer,
-        {
-          opacity: loginOpacity,
-          transform: [
-            {translateX: loginTranslateX},
-          ],
-        },
-      ]}>
-      <LoginScreen />
+        StyleSheet.absoluteFill,
+        {opacity: welcomeOpacity},
+      ]}
+      pointerEvents={animationReady ? 'auto' : 'none'}>
+      <AuthWelcomeScreen
+        onGetStarted={authState.signInWithBrowser}
+        error={authState.error}
+        clearError={authState.clearError}
+      />
     </Animated.View>
   );
 }
 
 function AppContent() {
   const authState = useAuthState();
-  const [splashComplete, setSplashComplete] = useState(false);
+  const [forceShowWelcome, setForceShowWelcome] = useState(false);
+
+  // Escape hatch: if loading takes >3s, show welcome so user isn't stuck
+  useEffect(() => {
+    if (!authState.isLoading) return;
+    const t = setTimeout(() => setForceShowWelcome(true), 3000);
+    return () => clearTimeout(t);
+  }, [authState.isLoading]);
+
+  // Handle auth callback from browser (posthive://auth/callback?access_token=...&refresh_token=...)
+  useEffect(() => {
+    const handleAuthCallback = async (url: string | null) => {
+      if (!url || !url.startsWith('posthive://auth/callback')) return;
+      try {
+        await createSessionFromUrl(url);
+      } catch (err) {
+        console.error('Auth callback error:', err);
+      }
+    };
+
+    Linking.getInitialURL().then(handleAuthCallback);
+    const subscription = Linking.addEventListener('url', ({url}) => handleAuthCallback(url));
+    return () => subscription.remove();
+  }, []);
   const welcomeOpacity = useRef(new Animated.Value(0)).current;
   const welcomeTranslateX = useRef(new Animated.Value(SCREEN_WIDTH)).current;
   const appOpacity = useRef(new Animated.Value(0)).current;
   const appTranslateX = useRef(new Animated.Value(SCREEN_WIDTH)).current;
   const prevShowWelcome = useRef(authState.showWelcome);
   const prevIsAuthenticated = useRef<boolean>(!!(authState.isAuthenticated && authState.currentWorkspace));
-
-  const handleSplashComplete = useCallback(() => {
-    setSplashComplete(true);
-  }, []);
-
-  // Calculate auth step for wave animation (changes trigger wave shift)
-  // Must be defined before any conditional returns
-  const authStep = useMemo(() => {
-    if (authState.isLoading) return 0;
-    if (!authState.isAuthenticated) return 1;
-    if (authState.needsWorkspaceSelection) return 2;
-    return 3;
-  }, [authState.isLoading, authState.isAuthenticated, authState.needsWorkspaceSelection]);
 
   // Animate welcome screen entrance
   useEffect(() => {
@@ -624,57 +999,25 @@ function AppContent() {
 
   // Show welcome screen after login/workspace selection
   if (authState.showWelcome && authState.user) {
-    const userName = authState.user.user_metadata?.name || 
-                     authState.user.user_metadata?.full_name || 
-                     authState.user.email?.split('@')[0] || 
+    const userName = authState.user.user_metadata?.name ||
+                     authState.user.user_metadata?.full_name ||
+                     authState.user.email?.split('@')[0] ||
                      'there';
     return (
       <AuthContext.Provider value={authState}>
-        <Animated.View
-          style={[
-            styles.fullScreen,
-            {
-              opacity: welcomeOpacity,
-              transform: [
-                {translateX: welcomeTranslateX},
-              ],
-            },
-          ]}>
-          <WelcomeScreen
-            userName={userName}
-            onComplete={authState.dismissWelcome}
-          />
-        </Animated.View>
-      </AuthContext.Provider>
-    );
-  }
-
-  // Main app when authenticated with workspace
-  const [globalTabIndex, setGlobalTabIndex] = useState(0);
-  
-  if (authState.isAuthenticated && authState.currentWorkspace && !authState.isLoading) {
-    return (
-      <AuthContext.Provider value={authState}>
         <View style={styles.fullScreen}>
-          {/* Global background - always visible behind everything */}
-          <View style={StyleSheet.absoluteFill} pointerEvents="none">
-            <NoisyWaveBackground tabIndex={globalTabIndex} />
-          </View>
+          <View style={styles.startupBackdrop} pointerEvents="none" />
           <Animated.View
             style={[
               styles.fullScreen,
               {
-                opacity: appOpacity,
-                transform: [
-                  {translateX: appTranslateX},
-                ],
-                backgroundColor: 'transparent',
+                opacity: welcomeOpacity,
+                transform: [{translateX: welcomeTranslateX}],
               },
             ]}>
-            <AuthenticatedApp
-              userId={authState.user?.id}
-              workspaceId={authState.currentWorkspace?.id}
-              onTabIndexChange={setGlobalTabIndex}
+            <WelcomeScreen
+              userName={userName}
+              onComplete={authState.dismissWelcome}
             />
           </Animated.View>
         </View>
@@ -682,26 +1025,42 @@ function AppContent() {
     );
   }
 
-  // Auth flow with splash animation
+  const showDashboard = authState.isAuthenticated && authState.currentWorkspace && !authState.isLoading;
+  // Authenticated users stay on a solid backdrop while workspace state resolves or the picker is shown.
+  const showAuthContent =
+    forceShowWelcome || (!authState.isLoading && !authState.isAuthenticated);
+
   return (
     <AuthContext.Provider value={authState}>
       <View style={styles.container}>
-        {/* Global wave background for auth flow */}
-        <View style={StyleSheet.absoluteFill} pointerEvents="none">
-          <NoisyWaveBackground tabIndex={authStep} />
-        </View>
+        <View style={styles.startupBackdrop} pointerEvents="none" />
 
-        {/* Background content (Login) */}
-        <AuthScreen 
-          authState={authState} 
-          animationReady={splashComplete && !authState.isLoading}
-        />
-        
-        {/* Splash overlay on top */}
-        <SplashOverlay
-          isLoading={authState.isLoading}
-          onComplete={handleSplashComplete}
-        />
+        {/* Welcome screen - only mount while signed out */}
+        {showAuthContent && (
+          <AuthScreen
+            authState={authState}
+            animationReady={showAuthContent}
+          />
+        )}
+
+        {/* Dashboard - slides in from right when authenticated with workspace */}
+        {showDashboard && (
+          <Animated.View
+            style={[
+              StyleSheet.absoluteFill,
+              {
+                opacity: appOpacity,
+                transform: [{translateX: appTranslateX}],
+                backgroundColor: 'transparent',
+              },
+            ]}
+            pointerEvents="box-none">
+            <AuthenticatedApp
+              userId={authState.user?.id}
+              workspaceId={authState.currentWorkspace?.id}
+            />
+          </Animated.View>
+        )}
 
         {/* Workspace selection modal - shown when authenticated but no workspace selected */}
         {authState.needsWorkspaceSelection && (
@@ -710,11 +1069,17 @@ function AppContent() {
             workspaces={authState.workspaces}
             currentWorkspace={null}
             onSelectWorkspace={authState.selectWorkspace}
-            onClose={() => {
-              // Don't allow closing if workspace is required
-            }}
+            onClose={() => {}}
           />
         )}
+
+        {/* In-app auth WebView */}
+        <AuthWebViewModal
+          visible={authState.showAuthWebView}
+          onClose={authState.closeAuthWebView}
+          onAuthSuccess={authState.refreshAuthState}
+          onError={(msg) => authState.setError(msg)}
+        />
       </View>
     </AuthContext.Provider>
   );
@@ -738,35 +1103,18 @@ export default function App() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#000000', // Black background for wave effect
+    backgroundColor: '#000000',
   },
   appContainer: {
     flex: 1,
   },
   container: {
     flex: 1,
-    backgroundColor: 'transparent', // Transparent to show wave background
+    backgroundColor: 'transparent',
   },
-  splashOverlay: {
+  startupBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 100,
-    backgroundColor: 'transparent', // Show wave background
-  },
-  logoContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 101,
-  },
-  logo: {
-    color: theme.colors.textPrimary,
-    fontSize: 56,
-    fontWeight: '900',
-    letterSpacing: -1,
-  },
-  splashSpinner: {
-    marginTop: 24,
+    backgroundColor: '#000000',
   },
   fullScreen: {
     flex: 1,
@@ -775,4 +1123,44 @@ const styles = StyleSheet.create({
   authContainer: {
     flex: 1,
   },
+  appContentLayer: {
+    flex: 1,
+  },
+  sidebarBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 900,
+  },
+  sidebarDimmer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.52)',
+  },
+  mainTabsWrap: {
+    flex: 1,
+  },
+  authenticatedNavWrap: {
+    flex: 1,
+  },
+  mainPagerRoot: {
+    flex: 1,
+  },
+  mainPagerContent: {
+    flex: 1,
+  },
+  mainPagerTopOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 200,
+    elevation: 24,
+  },
+  // Soft black scrim rising from the bottom so screen content fades out
+  // before colliding with the system tab bar. Sits below the FAB (zIndex
+  // 850) and the floating top bar (zIndex 200), but above screen content.
+  bottomNavScrim: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 150,
+    elevation: 18,
+  },
 });
+

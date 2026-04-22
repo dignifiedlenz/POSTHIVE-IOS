@@ -1,4 +1,4 @@
-import React, {useRef, useState, useCallback, useImperativeHandle, forwardRef, useEffect} from 'react';
+import React, {useRef, useState, useCallback, useImperativeHandle, forwardRef, useEffect, useMemo} from 'react';
 import {
   View,
   StyleSheet,
@@ -8,10 +8,11 @@ import {
   ActivityIndicator,
   Animated,
   GestureResponderEvent,
-  Modal,
   BackHandler,
-  useWindowDimensions,
-  StatusBar,
+  Platform,
+  Modal,
+  Dimensions,
+  ScaledSize,
 } from 'react-native';
 import Video, {OnProgressData, OnLoadData} from 'react-native-video';
 import {
@@ -52,6 +53,8 @@ interface VideoPlayerProps {
   onCommentPress?: (currentTime: number) => void;
   /** Rendered inside fullscreen modal when provided - use for comment popup that must appear over video */
   commentPopupOverlay?: React.ReactNode;
+  /** When true, forces video to pause (e.g. when off-screen in a carousel) */
+  forcePaused?: boolean;
 }
 
 export interface VideoPlayerRef {
@@ -62,8 +65,9 @@ export interface VideoPlayerRef {
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
-  ({source, poster, onTimeUpdate, commentMarkers = [], onFullscreenChange, onAspectRatioChange, fillContainer, title, onBack, onMenuPress, showOverlayHeader = false, onCommentPress, commentPopupOverlay}, ref) => {
+  ({source, poster, onTimeUpdate, commentMarkers = [], onFullscreenChange, onAspectRatioChange, fillContainer, title, onBack, onMenuPress, showOverlayHeader = false, onCommentPress, commentPopupOverlay, forcePaused = false}, ref) => {
     const videoRef = useRef<Video>(null);
+    const fullscreenVideoRef = useRef<Video>(null);
     const controlsTimeout = useRef<NodeJS.Timeout | null>(null);
     const controlsOpacity = useRef(new Animated.Value(1)).current;
     const insets = useSafeAreaInsets();
@@ -76,13 +80,33 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     const [duration, setDuration] = useState(0);
     const [showControls, setShowControls] = useState(true);
     const [videoAspectRatio, setVideoAspectRatio] = useState(16 / 9);
+
+    // Track window dimensions so the fullscreen modal can react to rotation. The Modal below opts
+    // into all orientations, so it rotates even when the rest of the app is portrait-locked.
+    const [windowSize, setWindowSize] = useState<ScaledSize>(() => Dimensions.get('window'));
+    useEffect(() => {
+      const sub = Dimensions.addEventListener('change', ({window}) => {
+        setWindowSize(window);
+      });
+      return () => sub.remove();
+    }, []);
+    const isLandscape = windowSize.width > windowSize.height;
     const progressBarRef = useRef<View>(null);
     const progressBarLayout = useRef({x: 0, width: 0});
-    const windowDims = useWindowDimensions();
+    const lastScrubTime = useRef(0);
+    const scrubThrottleMs = 80;
+
+    useEffect(() => {
+      if (forcePaused) setIsPlaying(false);
+    }, [forcePaused]);
+
+    // Pick whichever Video instance is currently mounted as the playback target so
+    // imperative seek calls hit the right player when the modal is open.
+    const activeVideoRef = isFullscreen ? fullscreenVideoRef : videoRef;
 
     useImperativeHandle(ref, () => ({
       seekTo: (time: number) => {
-        videoRef.current?.seek(time);
+        activeVideoRef.current?.seek(time);
         setCurrentTime(time);
       },
       getCurrentTime: () => currentTime,
@@ -111,18 +135,16 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       onFullscreenChange?.(isFullscreen);
     }, [isFullscreen, onFullscreenChange]);
 
-    // Orientation = fullscreen state: landscape = fullscreen, portrait = normal layout
+    // Auto enter/exit fullscreen when the device rotates. The app is portrait-locked
+    // at the iOS level, but the fullscreen modal opts into all orientations so the
+    // video can fill the rotated screen with proper safe-area letterboxing.
     useEffect(() => {
-      const isLandscape = windowDims.width > windowDims.height;
-      if (isLandscape && !isFullscreen) {
-        setIsFullscreen(true);
-      } else if (!isLandscape && isFullscreen) {
-        setIsFullscreen(false);
-      }
-    }, [windowDims.width, windowDims.height, isFullscreen]);
+      setIsFullscreen(isLandscape);
+    }, [isLandscape]);
 
-    // Android back button - exit fullscreen modal
+    // Android back button - exit native fullscreen
     useEffect(() => {
+      if (Platform.OS !== 'android') return;
       const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
         if (isFullscreen) {
           setIsFullscreen(false);
@@ -133,10 +155,38 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       return () => backHandler.remove();
     }, [isFullscreen]);
 
+    // When fullscreen toggles, the *other* <Video> instance (inline ↔ fullscreen)
+    // becomes the active one. The newly active player needs to be seeked back to
+    // wherever the previous one left off so the user doesn't lose their place.
+    // The inline player stays mounted (hidden) across toggles, so we seek it on
+    // exit; the fullscreen player is mounted on entry and seeked in its onLoad.
+    const prevFullscreenRef = useRef(isFullscreen);
+    useEffect(() => {
+      const wasFullscreen = prevFullscreenRef.current;
+      prevFullscreenRef.current = isFullscreen;
+      if (wasFullscreen && !isFullscreen) {
+        const resumeAt = savedPositionRef.current;
+        if (resumeAt > 0) {
+          // Defer one frame so the inline <Video> is visible/active before seeking.
+          requestAnimationFrame(() => {
+            videoRef.current?.seek(resumeAt);
+          });
+        }
+      }
+    }, [isFullscreen]);
+
     const handleProgress = useCallback((data: OnProgressData) => {
       setCurrentTime(data.currentTime);
+      savedPositionRef.current = data.currentTime;
       onTimeUpdate?.(data.currentTime);
     }, [onTimeUpdate]);
+
+    useEffect(() => {
+      savedPlayingRef.current = isPlaying;
+    }, [isPlaying]);
+
+    const savedPositionRef = useRef(0);
+    const savedPlayingRef = useRef(false);
 
     const handleLoad = useCallback((data: OnLoadData) => {
       setDuration(data.duration);
@@ -146,29 +196,48 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         setVideoAspectRatio(ratio);
         onAspectRatioChange?.(ratio);
       }
-      // Restore playback position when video (re)loads (e.g. after fullscreen toggle)
-      if (currentTime > 0) {
-        videoRef.current?.seek(currentTime);
-      }
-    }, [onAspectRatioChange, currentTime]);
+    }, [onAspectRatioChange]);
 
-    const handleScrub = useCallback((evt: GestureResponderEvent) => {
-      const barWidth = progressBarLayout.current.width;
-      if (barWidth > 0 && duration > 0) {
-        const prog = Math.max(0, Math.min(1, evt.nativeEvent.locationX / barWidth));
-        const seekTime = prog * duration;
-        videoRef.current?.seek(seekTime);
-        setCurrentTime(seekTime);
-        resetControlsTimer();
-      }
-    }, [duration, resetControlsTimer]);
+    // The fullscreen <Video> mounts fresh every time the modal opens, so its onLoad
+    // is the correct place to resume playback at the position the inline player was
+    // last at. This prevents the visible "jump back to 0" on rotation/fullscreen.
+    const handleFullscreenLoad = useCallback(
+      (data: OnLoadData) => {
+        handleLoad(data);
+        const resumeAt = savedPositionRef.current;
+        if (resumeAt > 0) {
+          fullscreenVideoRef.current?.seek(resumeAt);
+        }
+      },
+      [handleLoad],
+    );
+
+    const getScrubPosition = useCallback((evt: GestureResponderEvent) => {
+      const {width} = progressBarLayout.current;
+      if (width <= 0 || duration <= 0) return null;
+      const locX = evt.nativeEvent.locationX ?? 0;
+      const prog = Math.max(0, Math.min(1, locX / width));
+      return prog * duration;
+    }, [duration]);
+
+    const handleScrub = useCallback((evt: GestureResponderEvent, isRelease: boolean) => {
+      const seekTime = getScrubPosition(evt);
+      if (seekTime == null) return;
+      const now = Date.now();
+      if (!isRelease && now - lastScrubTime.current < scrubThrottleMs) return;
+      lastScrubTime.current = now;
+      activeVideoRef.current?.seek(seekTime);
+      setCurrentTime(seekTime);
+      savedPositionRef.current = seekTime;
+      resetControlsTimer();
+    }, [getScrubPosition, resetControlsTimer, activeVideoRef]);
 
     const handleSkip = useCallback((seconds: number) => {
       const newTime = Math.max(0, Math.min(duration, currentTime + seconds));
-      videoRef.current?.seek(newTime);
+      activeVideoRef.current?.seek(newTime);
       setCurrentTime(newTime);
       resetControlsTimer();
-    }, [currentTime, duration, resetControlsTimer]);
+    }, [currentTime, duration, resetControlsTimer, activeVideoRef]);
 
     const togglePlayPause = useCallback(() => {
       setIsPlaying(prev => !prev);
@@ -185,19 +254,6 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       resetControlsTimer();
     }, [resetControlsTimer]);
 
-    const screenDimensions = {width: windowDims.width, height: windowDims.height};
-    const isLandscape = screenDimensions.width > screenDimensions.height;
-
-    // Fullscreen: fit video to screen (no cropping)
-    const fullscreenVideoDimensions = (() => {
-      const {width: sw, height: sh} = screenDimensions;
-      const screenAspect = sw / sh;
-      if (videoAspectRatio > screenAspect) {
-        return {width: sw, height: sw / videoAspectRatio};
-      }
-      return {width: sh * videoAspectRatio, height: sh};
-    })();
-
     const handleVideoPress = useCallback(() => {
       if (showControls) {
         Animated.timing(controlsOpacity, {toValue: 0, duration: 200, useNativeDriver: true}).start(() => setShowControls(false));
@@ -208,10 +264,8 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
 
     const progress = duration > 0 ? currentTime / duration : 0;
 
-    const effectiveIsLandscape = isFullscreen && isLandscape;
     const renderControls = (forFullscreen: boolean) => (
       <Animated.View style={[styles.controlsOverlay, {opacity: controlsOpacity}]} pointerEvents={showControls ? 'auto' : 'none'}>
-        {!effectiveIsLandscape && (
         <View style={[styles.topBar, {paddingTop: forFullscreen ? Math.max(insets.top, 12) : 8, paddingHorizontal: forFullscreen ? Math.max(insets.left, insets.right, 20) : Math.max(insets.left, insets.right, 12)}]}>
           {showOverlayHeader && onBack && !forFullscreen ? (
             <TouchableOpacity style={styles.iconButton} onPress={onBack} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
@@ -235,8 +289,6 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
             <View style={styles.iconButton} />
           )}
         </View>
-        )}
-        {effectiveIsLandscape && <View style={styles.spacer} />}
 
         {onCommentPress && (
           <View style={[styles.floatingCommentButton, forFullscreen && {bottom: Math.max(insets.bottom, 20) + 50, right: Math.max(insets.right, 16)}]} pointerEvents="box-none">
@@ -261,11 +313,9 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         </View>
 
         <View style={[styles.bottomBar, {paddingBottom: forFullscreen ? Math.max(insets.bottom, 20) : 8, paddingHorizontal: forFullscreen ? Math.max(insets.left, insets.right, 44) : Math.max(insets.left, insets.right, 12)}]}>
-          {effectiveIsLandscape && (
-            <TouchableOpacity style={styles.iconButton} onPress={toggleMute} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-              {isMuted ? <VolumeX size={18} color="#fff" /> : <Volume2 size={18} color="#fff" />}
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity style={styles.iconButton} onPress={toggleMute} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+            {isMuted ? <VolumeX size={18} color="#fff" /> : <Volume2 size={18} color="#fff" />}
+          </TouchableOpacity>
           <Text style={styles.timeText}>{formatVideoTimestamp(currentTime)}</Text>
           <View
             ref={progressBarRef}
@@ -273,9 +323,9 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
             onLayout={(e) => { progressBarLayout.current = { x: e.nativeEvent.layout.x, width: e.nativeEvent.layout.width }; }}
             onStartShouldSetResponder={() => true}
             onMoveShouldSetResponder={() => true}
-            onResponderGrant={handleScrub}
-            onResponderMove={handleScrub}
-            onResponderRelease={handleScrub}>
+            onResponderGrant={(e) => handleScrub(e, false)}
+            onResponderMove={(e) => handleScrub(e, false)}
+            onResponderRelease={(e) => handleScrub(e, true)}>
             <View style={styles.progressBackground}>
               {duration > 0 && commentMarkers.map(marker => (
                 <View key={marker.id} style={[styles.commentMarker, {left: `${(marker.time / duration) * 100}%`}]} />
@@ -292,81 +342,127 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       </Animated.View>
     );
 
-    const videoElement = (
-      <Video
-        ref={videoRef}
-        source={{uri: source}}
-        poster={poster}
-        style={isFullscreen ? fullscreenVideoDimensions : styles.video}
-        paused={!isPlaying}
-        muted={isMuted}
-        repeat={false}
-        resizeMode="contain"
-        onProgress={handleProgress}
-        onLoad={handleLoad}
-        onLoadStart={() => setIsLoading(true)}
-        onReadyForDisplay={() => setIsLoading(false)}
-      />
-    );
+    // NOTE: don't include `startPosition` here — useMemo with deps [source] would
+    // freeze it at 0 (the value of savedPositionRef on first render), and the
+    // fullscreen <Video> would always start over. We seek imperatively in
+    // handleFullscreenLoad / the exit-fullscreen effect instead.
+    const videoSource = React.useMemo(() => ({uri: source}), [source]);
 
-    if (isFullscreen) {
-      return (
-        <>
-          <StatusBar hidden />
-          <View style={[styles.container, fillContainer && styles.fillContainer]}>
-            <View style={[styles.videoWrapper, fillContainer ? styles.fillWrapper : {aspectRatio: videoAspectRatio}]} />
-          </View>
-          <Modal
-            visible
-            animationType="fade"
-            presentationStyle="fullScreen"
-            statusBarTranslucent
-            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}
-            onRequestClose={() => setIsFullscreen(false)}>
-            <View style={styles.fullscreenContainer}>
-              <TouchableWithoutFeedback onPress={handleVideoPress}>
-                <View style={styles.fullscreenInner}>
-                  <View
-                    style={[
-                      styles.fullscreenVideoWrapper,
-                      {
-                        position: 'absolute',
-                        left: (screenDimensions.width - fullscreenVideoDimensions.width) / 2,
-                        top: (screenDimensions.height - fullscreenVideoDimensions.height) / 2,
-                        width: fullscreenVideoDimensions.width,
-                        height: fullscreenVideoDimensions.height,
-                      },
-                    ]}>
-                    {videoElement}
-                    {isLoading && (
-                      <View style={styles.loadingOverlay}>
-                        <ActivityIndicator size="large" color="#fff" />
-                      </View>
-                    )}
-                  </View>
-                  {renderControls(true)}
-                  {commentPopupOverlay}
-                </View>
-              </TouchableWithoutFeedback>
-            </View>
-          </Modal>
-        </>
-      );
-    }
+    // Compute the fullscreen video frame so the video stays inside the device's safe-area
+    // rectangle (no bleed under the notch / Dynamic Island / home indicator) and is letterboxed
+    // to match the source aspect ratio. Only the *actual* safe-area insets are respected —
+    // no extra padding — so the video gets as close to edge-to-edge as the hardware allows.
+    const fullscreenLayout = useMemo(() => {
+      // In landscape the notch ends up on one side; mirror it so the video stays centred.
+      const horizontalInset = isLandscape ? Math.max(insets.left, insets.right) : 0;
+      const verticalInset = isLandscape ? Math.max(insets.top, insets.bottom) : insets.top;
+
+      const availableWidth = Math.max(0, windowSize.width - horizontalInset * 2);
+      const availableHeight = Math.max(0, windowSize.height - verticalInset * 2);
+
+      // Fit to available rect while preserving aspect ratio (object-fit: contain).
+      let videoWidth = availableWidth;
+      let videoHeight = availableWidth / videoAspectRatio;
+      if (videoHeight > availableHeight) {
+        videoHeight = availableHeight;
+        videoWidth = availableHeight * videoAspectRatio;
+      }
+
+      return {
+        horizontalInset,
+        verticalInset,
+        availableWidth,
+        availableHeight,
+        videoWidth,
+        videoHeight,
+      };
+    }, [isLandscape, insets.left, insets.right, insets.top, insets.bottom, windowSize.width, windowSize.height, videoAspectRatio]);
 
     return (
       <View style={[styles.container, fillContainer && styles.fillContainer]}>
         <TouchableWithoutFeedback onPress={handleVideoPress}>
           <View style={[styles.videoWrapper, fillContainer ? styles.fillWrapper : {aspectRatio: videoAspectRatio}]}>
-            {videoElement}
-            {isLoading && (
+            {/* Inline player. Hidden visually while fullscreen modal is up so we don't
+                double-render frames or fight for the audio session. */}
+            <Video
+              ref={videoRef}
+              source={videoSource}
+              poster={poster}
+              style={[styles.video, isFullscreen && styles.hiddenVideo]}
+              paused={!isPlaying || forcePaused || isFullscreen}
+              muted={isMuted}
+              repeat={false}
+              resizeMode="contain"
+              onProgress={isFullscreen ? undefined : handleProgress}
+              onLoad={handleLoad}
+              onLoadStart={() => setIsLoading(true)}
+              onReadyForDisplay={() => setIsLoading(false)}
+            />
+            {isLoading && !isFullscreen && (
               <View style={styles.loadingOverlay}>
                 <ActivityIndicator size="large" color="#fff" />
               </View>
             )}
-            {renderControls(false)}
+            {!isFullscreen && renderControls(false)}
+            {!isFullscreen && commentPopupOverlay}
           </View>
         </TouchableWithoutFeedback>
+
+        {/* Custom fullscreen modal. supportedOrientations lets it rotate to landscape on its
+            own, even though the rest of the app is portrait-locked at the iOS level. */}
+        <Modal
+          visible={isFullscreen}
+          presentationStyle="overFullScreen"
+          transparent
+          animationType="fade"
+          supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}
+          onRequestClose={() => setIsFullscreen(false)}>
+          <TouchableWithoutFeedback onPress={handleVideoPress}>
+            <View style={styles.fullscreenContainer}>
+              <View
+                style={[
+                  styles.fullscreenSafeArea,
+                  {
+                    paddingTop: fullscreenLayout.verticalInset,
+                    paddingBottom: fullscreenLayout.verticalInset,
+                    paddingLeft: fullscreenLayout.horizontalInset,
+                    paddingRight: fullscreenLayout.horizontalInset,
+                  },
+                ]}>
+                <View
+                  style={[
+                    styles.fullscreenVideoWrapper,
+                    {
+                      width: fullscreenLayout.videoWidth,
+                      height: fullscreenLayout.videoHeight,
+                    },
+                  ]}>
+                  <Video
+                    ref={fullscreenVideoRef}
+                    source={videoSource}
+                    poster={poster}
+                    style={styles.video}
+                    paused={!isPlaying || forcePaused}
+                    muted={isMuted}
+                    repeat={false}
+                    resizeMode="contain"
+                    onProgress={handleProgress}
+                    onLoad={handleFullscreenLoad}
+                    onLoadStart={() => setIsLoading(true)}
+                    onReadyForDisplay={() => setIsLoading(false)}
+                  />
+                  {isLoading && (
+                    <View style={styles.loadingOverlay}>
+                      <ActivityIndicator size="large" color="#fff" />
+                    </View>
+                  )}
+                </View>
+              </View>
+              {renderControls(true)}
+              {commentPopupOverlay}
+            </View>
+          </TouchableWithoutFeedback>
+        </Modal>
       </View>
     );
   },
@@ -391,14 +487,17 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  hiddenVideo: {
+    opacity: 0,
+  },
   fullscreenContainer: {
     flex: 1,
     backgroundColor: '#000',
   },
-  fullscreenInner: {
+  fullscreenSafeArea: {
     flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   fullscreenVideoWrapper: {
     backgroundColor: '#000',

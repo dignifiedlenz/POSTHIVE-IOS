@@ -7,12 +7,18 @@ import notifee, {
 } from '@notifee/react-native';
 import {supabase} from '../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {devLog} from '../lib/devLog';
 
 // Get our custom native push notification module
 const {PushNotificationModule} = NativeModules;
 
 const DEVICE_TOKEN_KEY = '@posthive_device_token';
 const NOTIFICATION_PREFS_KEY = '@posthive_notification_prefs';
+// Marker so we only auto-prompt for the system permission once per install.
+// iOS only shows the prompt the first time anyway, but Android (13+) will
+// keep silently denying after the user dismisses without "don't ask again",
+// so we still want to avoid being annoying on subsequent launches.
+const PERMISSION_PROMPTED_KEY = '@posthive_notification_permission_prompted';
 
 export interface NotificationPreferences {
   enabled: boolean;
@@ -48,6 +54,12 @@ export function usePushNotifications({
   const [preferences, setPreferences] = useState<NotificationPreferences>(DEFAULT_PREFERENCES);
   const [isLoading, setIsLoading] = useState(true);
   const appState = useRef(AppState.currentState);
+  // Refs let `initialize` (declared first) call into `requestPermission` /
+  // `updatePreferences` (declared later) without circular dependencies.
+  const requestPermissionRef = useRef<(() => Promise<boolean>) | null>(null);
+  const updatePreferencesRef = useRef<((p: Partial<NotificationPreferences>) => void) | null>(
+    null,
+  );
 
   // Load saved preferences
   useEffect(() => {
@@ -147,7 +159,7 @@ export function usePushNotifications({
       if (Platform.OS === 'ios' && PushNotificationModule) {
         // Use our custom native module for iOS
         const granted = await PushNotificationModule.registerForPushNotifications();
-        console.log('Push permission granted:', granted);
+        devLog('Push permission granted:', granted);
         
         setPermissionStatus(
           granted ? AuthorizationStatus.AUTHORIZED : AuthorizationStatus.DENIED,
@@ -159,11 +171,11 @@ export function usePushNotifications({
             try {
               const token = await PushNotificationModule.getDeviceToken();
               if (token) {
-                console.log('Got device token:', token);
+                devLog('Push: device token received');
                 registerDeviceToken(token);
               }
             } catch (e) {
-              console.log('Error getting device token:', e);
+                devLog('Error getting device token:', e);
             }
           }, 2000);
         }
@@ -196,7 +208,7 @@ export function usePushNotifications({
   // Register device token with backend
   const registerDeviceToken = useCallback(async (token: string) => {
     if (!userId) {
-      console.log('No user ID, skipping device token registration');
+      devLog('No user ID, skipping device token registration');
       return;
     }
 
@@ -220,7 +232,7 @@ export function usePushNotifications({
       if (error) {
         console.error('Error registering push token:', error);
       } else {
-        console.log('Push token registered successfully');
+        devLog('Push token registered successfully');
         setIsRegistered(true);
       }
     } catch (error) {
@@ -253,62 +265,97 @@ export function usePushNotifications({
       // Create Android channels
       await createNotificationChannel();
 
+      // Determine whether we've ever asked for the system permission on this
+      // install. We use this to auto-prompt exactly once on first launch so
+      // notifications are on by default unless the user explicitly denies.
+      const alreadyPrompted =
+        (await AsyncStorage.getItem(PERMISSION_PROMPTED_KEY)) === '1';
+
+      let currentStatus: AuthorizationStatus = AuthorizationStatus.NOT_DETERMINED;
+
       if (Platform.OS === 'ios') {
         // Check current iOS permission status
         if (PushNotificationModule) {
           try {
             const status = await PushNotificationModule.checkPermissionStatus();
-            console.log('iOS permission status:', status);
-            
+            devLog('iOS permission status:', status);
+
             if (status === 'authorized' || status === 'provisional') {
+              currentStatus = AuthorizationStatus.AUTHORIZED;
               setPermissionStatus(AuthorizationStatus.AUTHORIZED);
-              
+
               // Try to get existing device token
               const token = await PushNotificationModule.getDeviceToken();
               if (token) {
-                console.log('Found existing device token:', token);
+                devLog('Found existing device token');
                 registerDeviceToken(token);
               } else {
                 // Request permission again to trigger token generation
-                console.log('No token found, registering for remote notifications...');
+                devLog('No token found, registering for remote notifications...');
                 await PushNotificationModule.registerForPushNotifications();
-                
+
                 // Poll for token
                 setTimeout(async () => {
                   const newToken = await PushNotificationModule.getDeviceToken();
                   if (newToken) {
-                    console.log('Got device token after registration:', newToken);
+                    devLog('Got device token after registration');
                     registerDeviceToken(newToken);
                   }
                 }, 2000);
               }
             } else if (status === 'denied') {
+              currentStatus = AuthorizationStatus.DENIED;
               setPermissionStatus(AuthorizationStatus.DENIED);
             } else {
+              currentStatus = AuthorizationStatus.NOT_DETERMINED;
               setPermissionStatus(AuthorizationStatus.NOT_DETERMINED);
             }
           } catch (e) {
-            console.log('Native push module error:', e);
+            devLog('Native push module error:', e);
             // Fallback to notifee
             const settings = await notifee.getNotificationSettings();
+            currentStatus = settings.authorizationStatus;
             setPermissionStatus(settings.authorizationStatus);
           }
         } else {
           // Fallback to notifee
           const settings = await notifee.getNotificationSettings();
+          currentStatus = settings.authorizationStatus;
           setPermissionStatus(settings.authorizationStatus);
         }
       } else {
         // Android - check notifee permission status
         const settings = await notifee.getNotificationSettings();
+        currentStatus = settings.authorizationStatus;
         setPermissionStatus(settings.authorizationStatus);
+      }
+
+      // First-install auto-prompt: if the system has never been asked yet
+      // and we haven't prompted on this install, request permission now so
+      // notifications are opt-out rather than opt-in.
+      if (
+        !alreadyPrompted &&
+        currentStatus === AuthorizationStatus.NOT_DETERMINED
+      ) {
+        try {
+          devLog('Auto-requesting notification permission on first install');
+          await AsyncStorage.setItem(PERMISSION_PROMPTED_KEY, '1');
+          const granted = await requestPermissionRef.current?.();
+          if (granted) {
+            // Make sure the in-app preferences default to enabled so the
+            // master toggle reflects the granted permission immediately.
+            updatePreferencesRef.current?.({enabled: true});
+          }
+        } catch (e) {
+          devLog('Auto permission request failed:', e);
+        }
       }
     } catch (error) {
       console.error('Error initializing push notifications:', error);
     } finally {
       setIsLoading(false);
     }
-  }, [userId, registerDeviceToken]);
+  }, [registerDeviceToken]);
 
   // Handle notification press (foreground) via notifee
   useEffect(() => {
@@ -318,6 +365,16 @@ export function usePushNotifications({
       }
     });
   }, [onNotificationPress]);
+
+  // Keep refs in sync so `initialize` can trigger an auto-prompt without
+  // depending on the always-changing callbacks below.
+  useEffect(() => {
+    requestPermissionRef.current = requestPermission;
+  }, [requestPermission]);
+
+  useEffect(() => {
+    updatePreferencesRef.current = updatePreferences;
+  }, [updatePreferences]);
 
   // Initialize on mount when user is available
   useEffect(() => {
@@ -370,6 +427,6 @@ export function setupBackgroundHandler() {
   // Notifee handles background notifications automatically
   // This is a placeholder for any custom background handling
   notifee.onBackgroundEvent(async ({type, detail}) => {
-    console.log('Background notification event:', type, detail);
+    devLog('Background notification event:', type, detail);
   });
 }

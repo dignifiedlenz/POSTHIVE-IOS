@@ -102,6 +102,13 @@ export function useWidgetSync({
 
     // Update upcoming items
     const items = getUpcomingItemsFromRefs();
+    const todoCount = items.filter(i => i.type === 'todo').length;
+    const eventCount = items.filter(i => i.type === 'event').length;
+    console.log(
+      '[WidgetSync] Updating upcoming items:',
+      items.length,
+      `(${todoCount} todos, ${eventCount} events) — refs: todos=${todosRef.current.length}, events=${eventsRef.current.length}`,
+    );
     WidgetModule.updateUpcomingItems(items);
 
     // Update deliverable

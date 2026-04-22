@@ -5,11 +5,12 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Switch,
+  Image,
   ActivityIndicator,
   Platform,
   Linking,
 } from 'react-native';
+import {AppleNativeGlassSwitch} from '../../components/native/AppleNativeGlassSwitch';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
 import {
@@ -20,7 +21,6 @@ import {
   MessageSquare,
   AtSign,
   CheckSquare,
-  Film,
   ExternalLink,
 } from 'lucide-react-native';
 import {AuthorizationStatus} from '@notifee/react-native';
@@ -31,6 +31,8 @@ import {
   usePushNotifications,
   NotificationPreferences,
 } from '../../hooks/usePushNotifications';
+
+const DEFAULT_THUMBNAIL = 'https://www.posthive.app/thumbnail/default.png';
 
 interface SettingRowProps {
   icon: React.ReactNode;
@@ -62,16 +64,11 @@ function SettingRow({
           </Text>
         )}
       </View>
-      <Switch
+      <AppleNativeGlassSwitch
         value={value}
         onValueChange={onValueChange}
         disabled={disabled}
-        trackColor={{
-          false: theme.colors.border,
-          true: theme.colors.success,
-        }}
-        thumbColor={theme.colors.textPrimary}
-        ios_backgroundColor={theme.colors.border}
+        accessibilityLabel={title}
       />
     </View>
   );
@@ -188,15 +185,10 @@ export function NotificationSettingsScreen() {
                   : 'Push notifications are disabled'}
               </Text>
             </View>
-            <Switch
+            <AppleNativeGlassSwitch
               value={preferences.enabled && hasPermission}
               onValueChange={handleToggleMaster}
-              trackColor={{
-                false: theme.colors.border,
-                true: theme.colors.success,
-              }}
-              thumbColor={theme.colors.textPrimary}
-              ios_backgroundColor={theme.colors.border}
+              accessibilityLabel="Push Notifications"
             />
           </View>
         </View>
@@ -250,7 +242,13 @@ export function NotificationSettingsScreen() {
             <View style={styles.separator} />
 
             <SettingRow
-              icon={<Film size={18} color={isDisabled ? theme.colors.textMuted : theme.colors.textSecondary} />}
+              icon={(
+                <Image
+                  source={{uri: DEFAULT_THUMBNAIL}}
+                  style={{width: 18, height: 18, opacity: isDisabled ? 0.5 : 0.9}}
+                  resizeMode="cover"
+                />
+              )}
               title="Deliverable Updates"
               subtitle="Status changes and approvals"
               value={preferences.deliverableUpdates}

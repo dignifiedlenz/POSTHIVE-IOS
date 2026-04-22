@@ -13,7 +13,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
-import {useNavigation} from '@react-navigation/native';
+import {useNavigation, useRoute} from '@react-navigation/native';
 import {X, ArrowRight, ChevronDown, Sparkles, Send} from 'lucide-react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import LinearGradient from 'react-native-linear-gradient';
@@ -100,6 +100,9 @@ const PROJECT_TYPES: {key: ProjectType; label: string}[] = [
 
 export function CreationFlowScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
+  const initialCreationType = (route.params as {initialCreationType?: CreationType} | undefined)
+    ?.initialCreationType;
   const {user, currentWorkspace} = useAuth();
   const {addTodo} = useTodos({
     workspaceId: currentWorkspace?.id || '',
@@ -107,8 +110,10 @@ export function CreationFlowScreen() {
   });
 
   // Global state
-  const [phase, setPhase] = useState<'selection' | 'input' | 'success'>('selection');
-  const [selectedType, setSelectedType] = useState<CreationType | null>(null);
+  const [phase, setPhase] = useState<'selection' | 'input' | 'success'>(() =>
+    initialCreationType ? 'input' : 'selection',
+  );
+  const [selectedType, setSelectedType] = useState<CreationType | null>(() => initialCreationType ?? null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
 
@@ -201,69 +206,6 @@ export function CreationFlowScreen() {
     loadData();
   }, [currentWorkspace?.id]);
 
-  // Handle AI command submission
-  const handleAiCommandSubmit = useCallback(async () => {
-    if (!aiCommandText.trim() || !currentWorkspace || aiCommandProcessing) return;
-
-    setAiCommandProcessing(true);
-    try {
-      const result = await executeAICommand(aiCommandText, currentWorkspace.slug || '');
-      
-      if (result.success) {
-        showSuccess('CREATED');
-        setAiCommandText('');
-      }
-    } catch (error) {
-      console.error('AI command error:', error);
-    } finally {
-      setAiCommandProcessing(false);
-    }
-  }, [aiCommandText, currentWorkspace, aiCommandProcessing, showSuccess]);
-
-  // Initial animation
-  useEffect(() => {
-    Animated.timing(overlayOpacity, {
-      toValue: 1,
-      duration: 300,
-      useNativeDriver: true,
-    }).start();
-
-    setTimeout(() => {
-      Animated.parallel([
-        Animated.timing(titleOpacity, {
-          toValue: 1,
-          duration: 400,
-          useNativeDriver: true,
-        }),
-        Animated.spring(titleTranslateY, {
-          toValue: 0,
-          tension: 80,
-          friction: 12,
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }, 200);
-
-
-    optionAnimations.forEach((anim, index) => {
-      setTimeout(() => {
-        Animated.parallel([
-          Animated.timing(anim.opacity, {
-            toValue: 1,
-            duration: 400,
-            useNativeDriver: true,
-          }),
-          Animated.spring(anim.translateY, {
-            toValue: 0,
-            tension: 80,
-            friction: 12,
-            useNativeDriver: true,
-          }),
-        ]).start();
-      }, 500 + index * 100);
-    });
-  }, []);
-
   const animateStepIn = useCallback(() => {
     stepOpacity.setValue(0);
     stepTranslateY.setValue(40);
@@ -282,6 +224,60 @@ export function CreationFlowScreen() {
       }),
     ]).start();
   }, [stepOpacity, stepTranslateY]);
+
+  // Initial animation (skip selection UI when opened with initialCreationType from FAB)
+  useEffect(() => {
+    const instantType = (route.params as {initialCreationType?: CreationType} | undefined)?.initialCreationType;
+
+    Animated.timing(overlayOpacity, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+
+    if (instantType) {
+      const t = setTimeout(() => {
+        animateStepIn();
+        setTimeout(() => inputRef.current?.focus(), 300);
+      }, 80);
+      return () => clearTimeout(t);
+    }
+
+    setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(titleOpacity, {
+          toValue: 1,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+        Animated.spring(titleTranslateY, {
+          toValue: 0,
+          tension: 80,
+          friction: 12,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }, 200);
+
+    optionAnimations.forEach((anim, index) => {
+      setTimeout(() => {
+        Animated.parallel([
+          Animated.timing(anim.opacity, {
+            toValue: 1,
+            duration: 400,
+            useNativeDriver: true,
+          }),
+          Animated.spring(anim.translateY, {
+            toValue: 0,
+            tension: 80,
+            friction: 12,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }, 500 + index * 100);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only; match prior behavior
+  }, []);
 
   const animateStepOut = useCallback(() => {
     return new Promise<void>(resolve => {
@@ -327,6 +323,24 @@ export function CreationFlowScreen() {
       }, 1500);
     }, 100);
   }, [successOpacity, handleClose]);
+
+  const handleAiCommandSubmit = useCallback(async () => {
+    if (!aiCommandText.trim() || !currentWorkspace || aiCommandProcessing) return;
+
+    setAiCommandProcessing(true);
+    try {
+      const result = await executeAICommand(aiCommandText, currentWorkspace.slug || '');
+
+      if (result.success) {
+        showSuccess('CREATED');
+        setAiCommandText('');
+      }
+    } catch (error) {
+      console.error('AI command error:', error);
+    } finally {
+      setAiCommandProcessing(false);
+    }
+  }, [aiCommandText, currentWorkspace, aiCommandProcessing, showSuccess]);
 
   const handleSelectType = useCallback((type: CreationType) => {
     setSelectedType(type);

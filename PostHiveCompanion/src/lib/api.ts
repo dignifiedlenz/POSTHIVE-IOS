@@ -1,4 +1,4 @@
-import {supabase} from './supabase';
+import {supabase, AUTH_WEB_BASE_URL} from './supabase';
 import {
   Notification,
   Todo,
@@ -18,6 +18,49 @@ import {
   DriveAsset,
 } from './types';
 import {resolveThumbnail, resolvePlaybackUrl, extractBunnyGuid, constructBunnyThumbnail} from './utils';
+import {devLog} from './devLog';
+
+// Derive a thumbnail URL from a Cloudflare/Bunny Stream playback URL (replaces the
+// old `bunny_thumbnail_url` / `bunny_stream_video_id` columns which were dropped).
+function deriveAssetThumbFromPlaybackUrl(playbackUrl?: string | null): string | undefined {
+  if (!playbackUrl) return undefined;
+  if (playbackUrl.includes('videodelivery.net') || playbackUrl.includes('cloudflarestream.com')) {
+    const uidMatch = playbackUrl.match(/(?:videodelivery\.net|cloudflarestream\.com)\/([a-zA-Z0-9_-]+)/);
+    if (uidMatch) {
+      return `https://videodelivery.net/${uidMatch[1]}/thumbnails/thumbnail.jpg?time=5s`;
+    }
+  }
+  if (playbackUrl.includes('.b-cdn.net')) {
+    return playbackUrl
+      .replace(/\/playlist\.m3u8$/i, '/thumbnail.jpg')
+      .replace(/\/[^/]+\.(mp4|m4v|webm)$/i, '/thumbnail.jpg');
+  }
+  return undefined;
+}
+
+// ===== ACCOUNT (App Store account deletion) =====
+
+export async function requestAccountDeletion(accessToken: string): Promise<void> {
+  const res = await fetch(`${AUTH_WEB_BASE_URL}/api/auth/delete-account`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({confirmPhrase: 'DELETE'}),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    blockers?: {workspaceName?: string; workspaceSlug?: string}[];
+  };
+  if (!res.ok) {
+    let msg = data.error || `Request failed (${res.status})`;
+    if (data.blockers?.length) {
+      msg += `\n\n${data.blockers.map((b) => `• ${b.workspaceName || b.workspaceSlug || 'workspace'}`).join('\n')}`;
+    }
+    throw new Error(msg);
+  }
+}
 
 // ===== NOTIFICATIONS =====
 
@@ -98,29 +141,106 @@ interface TodoWithRelations {
 }
 
 export async function getTodos(workspaceId: string): Promise<Todo[]> {
-  const {data, error} = await supabase
-    .from('todos')
-    .select(
-      `
-      *,
-      assigned_user:assigned_to(name),
-      project:project_id(name),
-      deliverable:deliverable_id(name)
-    `,
-    )
-    .eq('workspace_id', workspaceId)
-    .order('created_at', {ascending: false});
+  const t0 = Date.now();
+  console.log('[getTodos] start workspace=', workspaceId);
 
-  if (error) {
-    throw error;
+  // Race the Supabase query against a hard 8s timeout so the call never hangs
+  // forever and we can see exactly which path failed.
+  const withTimeout = <T,>(p: Promise<T>, ms: number, label: string) =>
+    Promise.race<T>([
+      p,
+      new Promise<T>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`[getTodos] ${label} timed out after ${ms}ms`)),
+          ms,
+        ),
+      ),
+    ]);
+
+  // First attempt: original query with joins.
+  try {
+    const result = await withTimeout(
+      supabase
+        .from('todos')
+        .select(
+          `
+          *,
+          assigned_user:assigned_to(name),
+          project:project_id(name),
+          deliverable:deliverable_id(name)
+        `,
+        )
+        .eq('workspace_id', workspaceId)
+        .order('created_at', {ascending: false}),
+      8000,
+      'select-with-joins',
+    );
+
+    if (result.error) {
+      console.warn('[getTodos] joined query returned error', result.error);
+      throw result.error;
+    }
+
+    console.log(
+      '[getTodos] joined query ok in',
+      Date.now() - t0,
+      'ms, rows=',
+      result.data?.length ?? 0,
+    );
+
+    return ((result.data ?? []) as TodoWithRelations[]).map(todo => ({
+      ...todo,
+      assigned_name: todo.assigned_user?.name,
+      project_name: todo.project?.name,
+      deliverable_name: todo.deliverable?.name,
+    })) as Todo[];
+  } catch (joinedErr) {
+    console.warn(
+      '[getTodos] joined query failed (',
+      Date.now() - t0,
+      'ms ):',
+      joinedErr,
+    );
+
+    // Fallback: try the bare table without joins so we can tell whether the
+    // problem is RLS on `todos` itself or on one of the related tables /
+    // PostgREST relationship resolution.
+    try {
+      const bare = await withTimeout(
+        supabase
+          .from('todos')
+          .select('*')
+          .eq('workspace_id', workspaceId)
+          .order('created_at', {ascending: false}),
+        5000,
+        'select-bare',
+      );
+
+      if (bare.error) {
+        console.warn('[getTodos] bare query returned error', bare.error);
+        throw bare.error;
+      }
+
+      console.warn(
+        '[getTodos] bare query OK in',
+        Date.now() - t0,
+        'ms, rows=',
+        bare.data?.length ?? 0,
+        '— joins are the problem (RLS or PostgREST relationship)',
+      );
+
+      return (bare.data ?? []) as Todo[];
+    } catch (bareErr) {
+      console.error(
+        '[getTodos] bare query also failed (',
+        Date.now() - t0,
+        'ms ):',
+        bareErr,
+        '— problem is on the todos table itself (RLS, schema cache, or network)',
+      );
+      throw bareErr;
+    }
   }
-
-  return (data || []).map((todo: TodoWithRelations) => ({
-    ...todo,
-    assigned_name: todo.assigned_user?.name,
-    project_name: todo.project?.name,
-    deliverable_name: todo.deliverable?.name,
-  })) as Todo[];
 }
 
 export async function createTodo(
@@ -289,7 +409,7 @@ export async function getRecentDeliverables(
       if (assetIds.length > 0) {
         const {data: assets} = await supabase
           .from('assets')
-        .select('id, bunny_thumbnail_url, bunny_stream_video_id, bunny_hls_url, provider')
+        .select('id, playback_url, bunny_cdn_url, provider')
           .in('id', assetIds);
         
         (assets || []).forEach((a: any) => {
@@ -316,17 +436,13 @@ export async function getRecentDeliverables(
         
         if (linkedUpload && assetMap[linkedUpload.asset_id]) {
           const asset = assetMap[linkedUpload.asset_id];
-          
-          // Try bunny_thumbnail_url first
-          if (asset.bunny_thumbnail_url) {
-            thumb = asset.bunny_thumbnail_url;
-          }
-          // Construct from bunny_stream_video_id (use file_url to detect region)
-          else if (asset.bunny_stream_video_id && asset.provider !== 'cloudflare' && !asset.bunny_hls_url?.includes('videodelivery.net')) {
-            thumb = constructBunnyThumbnail(asset.bunny_stream_video_id, version.file_url);
+
+          thumb = deriveAssetThumbFromPlaybackUrl(asset.playback_url);
+          if (!thumb && asset.bunny_cdn_url) {
+            thumb = asset.bunny_cdn_url;
           }
         }
-        
+
         // Priority 2: Extract GUID from version.file_url
         if (!thumb && version.file_url) {
           const guid = extractBunnyGuid(version.file_url);
@@ -334,17 +450,17 @@ export async function getRecentDeliverables(
             thumb = constructBunnyThumbnail(guid, version.file_url);
           }
         }
-        
+
         // Priority 3: Fallback to version.thumbnail_url
         if (!thumb && version.thumbnail_url) {
           thumb = version.thumbnail_url;
         }
-        
+
         if (thumb) {
           thumbnailMap[deliverableId] = thumb;
         }
       });
-      
+
       console.log('[Thumbnail Debug] Fetched thumbnails for', Object.keys(thumbnailMap).length, 'of', deliverableIds.length, 'deliverables');
       
       // Debug: Show what we found
@@ -366,8 +482,8 @@ export async function getRecentDeliverables(
             version_number: linkedUpload.version_number,
           } : 'NO UPLOAD',
           asset: asset ? {
-            bunny_thumbnail_url: asset.bunny_thumbnail_url,
-            bunny_stream_video_id: asset.bunny_stream_video_id,
+            playback_url: asset.playback_url,
+            bunny_cdn_url: asset.bunny_cdn_url,
           } : 'NO ASSET',
           resolvedThumbnail: thumbnailMap[firstDeliverableId] || 'NONE',
         });
@@ -491,21 +607,21 @@ export async function getDeliverable(
       .single();
 
     if (upload?.asset_id) {
-      const {data: assetData} = await supabase
+      const {data: assetData, error: assetError} = await supabase
         .from('assets')
         .select(`
           id,
-          bunny_stream_video_id,
-          bunny_hls_url,
+          provider,
+          playback_url,
           bunny_cdn_url,
-          bunny_thumbnail_url,
           storage_url,
-          r2_url,
-          file_url,
           processing_status
         `)
         .eq('id', upload.asset_id)
         .single();
+      if (__DEV__ && assetError) {
+        console.warn('[getDeliverable] asset fetch error', assetError);
+      }
       asset = assetData;
     }
   }
@@ -514,24 +630,20 @@ export async function getDeliverable(
   const thumbnailUrl = resolveThumbnail({
     deliverable_thumbnail_url: data.thumbnail_url,
     deliverable_thumbnail: data.thumbnail,
-    asset_bunny_thumbnail_url: asset?.bunny_thumbnail_url,
-    asset_bunny_stream_video_id: asset?.bunny_stream_video_id,
-    asset_bunny_hls_url: asset?.bunny_hls_url,
     asset_provider: asset?.provider,
+    asset_playback_url: asset?.playback_url,
     version_file_url: latestVersion?.file_url,
     version_thumbnail_url: latestVersion?.thumbnail_url,
     asset_bunny_cdn_url: asset?.bunny_cdn_url,
-    asset_r2_url: asset?.r2_url,
-    asset_file_url: asset?.file_url,
     deliverable_type: data.type,
   });
 
-  // Resolve playback URL
+  // Resolve playback URL — prefers Cloudflare Stream / Bunny HLS, falls back to direct files
   const playbackUrl = resolvePlaybackUrl({
-    bunny_hls_url: asset?.bunny_hls_url,
+    playback_url: asset?.playback_url,
+    provider: asset?.provider,
     bunny_cdn_url: asset?.bunny_cdn_url,
     storage_url: asset?.storage_url,
-    r2_url: asset?.r2_url,
     file_url: latestVersion?.file_url,
     processing_status: asset?.processing_status,
   });
@@ -566,10 +678,19 @@ export async function getDeliverableVersions(deliverableId: string) {
   }
 
   // Fetch version_uploads to get asset IDs
-  const {data: uploads} = await supabase
+  const {data: uploads, error: uploadsError} = await supabase
     .from('version_uploads')
     .select('version_number, asset_id')
     .eq('deliverable_id', deliverableId);
+
+  if (__DEV__) {
+    console.log('[getDeliverableVersions] version_uploads', {
+      deliverableId,
+      uploadsError: uploadsError?.message,
+      uploadsCount: uploads?.length ?? 0,
+      uploads,
+    });
+  }
 
   // Create a map of version_number to asset_id
   const versionAssetMap: Record<number, string> = {};
@@ -578,27 +699,39 @@ export async function getDeliverableVersions(deliverableId: string) {
   });
 
   // Get unique asset IDs
-  const assetIds = [...new Set(Object.values(versionAssetMap))];
+  const assetIds = [...new Set(Object.values(versionAssetMap))].filter(Boolean);
 
   // Fetch assets
   let assetMap: Record<string, any> = {};
   if (assetIds.length > 0) {
-    const {data: assets} = await supabase
+    const {data: assets, error: assetsError} = await supabase
       .from('assets')
       .select(`
         id,
-        bunny_stream_video_id,
-        bunny_hls_url,
+        provider,
+        playback_url,
         bunny_cdn_url,
-        bunny_thumbnail_url,
         storage_url,
-        r2_url,
         processing_status
       `)
       .in('id', assetIds);
 
+    if (__DEV__) {
+      console.log('[getDeliverableVersions] assets', {
+        deliverableId,
+        requestedAssetIds: assetIds,
+        assetsError: assetsError?.message,
+        assetsCount: assets?.length ?? 0,
+        assets,
+      });
+    }
+
     (assets || []).forEach((a: any) => {
       assetMap[a.id] = a;
+    });
+  } else if (__DEV__) {
+    console.log('[getDeliverableVersions] no asset_ids resolved from version_uploads', {
+      deliverableId,
     });
   }
 
@@ -609,21 +742,19 @@ export async function getDeliverableVersions(deliverableId: string) {
 
     // Resolve thumbnail for this version
     const thumbnailUrl = resolveThumbnail({
-      asset_bunny_thumbnail_url: asset?.bunny_thumbnail_url,
-      asset_bunny_stream_video_id: asset?.bunny_stream_video_id,
-      asset_bunny_hls_url: asset?.bunny_hls_url,
       asset_provider: asset?.provider,
+      asset_playback_url: asset?.playback_url,
       version_file_url: v.file_url,
       version_thumbnail_url: v.thumbnail_url,
       asset_bunny_cdn_url: asset?.bunny_cdn_url,
     });
 
-    // Resolve playback URL
+    // Resolve playback URL — prefers Cloudflare Stream / Bunny HLS, falls back to direct files
     const playbackUrl = resolvePlaybackUrl({
-      bunny_hls_url: asset?.bunny_hls_url,
+      playback_url: asset?.playback_url,
+      provider: asset?.provider,
       bunny_cdn_url: asset?.bunny_cdn_url,
       storage_url: asset?.storage_url,
-      r2_url: asset?.r2_url,
       file_url: v.file_url,
       processing_status: asset?.processing_status,
     });
@@ -632,14 +763,12 @@ export async function getDeliverableVersions(deliverableId: string) {
       ...v,
       thumbnail_url: thumbnailUrl || v.thumbnail_url,
       file_url: playbackUrl || v.file_url,
-      bunny_hls_url: asset?.bunny_hls_url,
+      provider: asset?.provider,
+      playback_url: asset?.playback_url,
       bunny_cdn_url: asset?.bunny_cdn_url,
-      bunny_stream_video_id: asset?.bunny_stream_video_id,
-      bunny_thumbnail_url: asset?.bunny_thumbnail_url,
       processing_status: asset?.processing_status,
       // Include storage URLs for download functionality
       storage_url: asset?.storage_url,
-      r2_url: asset?.r2_url,
     };
   });
 }
@@ -655,16 +784,15 @@ export async function getDeliverableGalleryImages(
       name?: string;
       file_url?: string | null;
       storage_url?: string | null;
-      r2_url?: string | null;
       bunny_cdn_url?: string | null;
-      bunny_thumbnail_url?: string | null;
+      playback_url?: string | null;
       uploaded_at?: string | null;
     }>,
   ) =>
     assets.map(asset => ({
       id: asset.id,
-      url: asset.bunny_cdn_url || asset.r2_url || asset.storage_url || asset.file_url || '',
-      thumbnail_url: asset.bunny_thumbnail_url || undefined,
+      url: asset.bunny_cdn_url || asset.storage_url || asset.file_url || asset.playback_url || '',
+      thumbnail_url: asset.bunny_cdn_url || asset.storage_url || undefined,
       name: asset.name,
       uploaded_at: asset.uploaded_at || undefined,
     }));
@@ -687,7 +815,6 @@ export async function getDeliverableGalleryImages(
 
         const url =
           asset.bunny_cdn_url ||
-          asset.r2_url ||
           asset.storage_url ||
           '';
 
@@ -697,9 +824,7 @@ export async function getDeliverableGalleryImages(
           id: item.id || asset.id,
           url,
           thumbnail_url:
-            asset.bunny_thumbnail_url ||
             asset.bunny_cdn_url ||
-            asset.r2_url ||
             asset.storage_url ||
             undefined,
           name: item.name || asset.name,
@@ -725,9 +850,8 @@ export async function getDeliverableGalleryImages(
       id,
       name,
       storage_url,
-      r2_url,
       bunny_cdn_url,
-      bunny_thumbnail_url,
+      playback_url,
       uploaded_at,
       type,
       mime_type
@@ -815,7 +939,7 @@ export async function getDeliverableGalleryImages(
     if (assetIds.length > 0) {
       const {data: assets, error: assetsError} = await supabase
         .from('assets')
-        .select('id, name, storage_url, r2_url, bunny_cdn_url, bunny_thumbnail_url, uploaded_at, type, mime_type')
+        .select('id, name, storage_url, bunny_cdn_url, playback_url, uploaded_at, type, mime_type')
         .in('id', assetIds)
         .or('type.in.(image,foto),mime_type.ilike.image/%');
 
@@ -847,7 +971,7 @@ export async function getDeliverableGalleryImages(
     if (anyAssetIds.length > 0) {
       const {data: anyAssets, error: anyAssetsError} = await supabase
         .from('assets')
-        .select('id, name, storage_url, r2_url, bunny_cdn_url, bunny_thumbnail_url, uploaded_at, type, mime_type')
+        .select('id, name, storage_url, bunny_cdn_url, playback_url, uploaded_at, type, mime_type')
         .in('id', anyAssetIds)
         .or('type.in.(image,foto),mime_type.ilike.image/%');
 
@@ -881,7 +1005,7 @@ export async function getDeliverableGalleryImages(
   if (deliverableData.type === 'image_gallery') {
     const {data: fotoAssets, error: fotoError} = await supabase
       .from('assets')
-      .select('id, name, storage_url, r2_url, bunny_cdn_url, bunny_thumbnail_url, uploaded_at, type, mime_type')
+      .select('id, name, storage_url, bunny_cdn_url, playback_url, uploaded_at, type, mime_type')
       .eq('project_id', deliverableData.project_id)
       .eq('type', 'foto')
       .order('uploaded_at', {ascending: false});
@@ -898,7 +1022,7 @@ export async function getDeliverableGalleryImages(
 
   const baseAssetsQuery = supabase
     .from('assets')
-    .select('id, name, storage_url, r2_url, bunny_cdn_url, bunny_thumbnail_url, uploaded_at, type, mime_type')
+    .select('id, name, storage_url, bunny_cdn_url, playback_url, uploaded_at, type, mime_type')
     .eq('project_id', deliverableData.project_id)
     .contains('tags', ['deliverables'])
     .or('type.in.(image,foto),mime_type.ilike.image/%')
@@ -1175,7 +1299,7 @@ export async function getUserWorkspaces(userId: string): Promise<Workspace[]> {
 
   if (accessToken) {
     try {
-      console.log('[mobile-auth] getUserWorkspaces:api-first:start', {userId});
+      devLog('[mobile-auth] getUserWorkspaces:api-first:start', {userId});
       const response = await fetch(`${API_BASE_URL}/api/workspaces`, {
         method: 'GET',
         headers: {
@@ -1183,7 +1307,7 @@ export async function getUserWorkspaces(userId: string): Promise<Workspace[]> {
         },
       });
       const payload = await parseJSONResponse(response);
-      console.log('[mobile-auth] getUserWorkspaces:api-first:response', {
+      devLog('[mobile-auth] getUserWorkspaces:api-first:response', {
         ok: response.ok,
         status: response.status,
         count: Array.isArray(payload?.workspaces) ? payload.workspaces.length : 0,
@@ -1196,7 +1320,7 @@ export async function getUserWorkspaces(userId: string): Promise<Workspace[]> {
       console.error('[mobile-auth] getUserWorkspaces:api-first:error', apiError);
     }
   } else {
-    console.log('[mobile-auth] getUserWorkspaces:api-first:no-access-token');
+    devLog('[mobile-auth] getUserWorkspaces:api-first:no-access-token');
   }
 
   const {data, error} = await supabase
@@ -1209,7 +1333,7 @@ export async function getUserWorkspaces(userId: string): Promise<Workspace[]> {
     )
     .eq('user_id', userId);
 
-  console.log('[mobile-auth] getUserWorkspaces:direct-result', {
+  devLog('[mobile-auth] getUserWorkspaces:direct-result', {
     userId,
     hasError: !!error,
     error: error?.message || null,
@@ -1246,9 +1370,9 @@ export async function getUserWorkspaces(userId: string): Promise<Workspace[]> {
     return mapped;
   }
 
-  console.log('[mobile-auth] getUserWorkspaces:fallback-api:start', {userId});
+  devLog('[mobile-auth] getUserWorkspaces:fallback-api:start', {userId});
   if (!accessToken) {
-    console.log('[mobile-auth] getUserWorkspaces:fallback-api:no-access-token');
+    devLog('[mobile-auth] getUserWorkspaces:fallback-api:no-access-token');
     return [];
   }
 
@@ -1261,7 +1385,7 @@ export async function getUserWorkspaces(userId: string): Promise<Workspace[]> {
     });
 
     const payload = await parseJSONResponse(response);
-    console.log('[mobile-auth] getUserWorkspaces:fallback-api:response', {
+    devLog('[mobile-auth] getUserWorkspaces:fallback-api:response', {
       ok: response.ok,
       status: response.status,
       hasWorkspace: !!payload?.workspace,
@@ -1434,7 +1558,7 @@ export async function getProjects(workspaceId: string): Promise<Project[]> {
       if (assetIds.length > 0) {
         const {data: assets} = await supabase
           .from('assets')
-          .select('id, bunny_thumbnail_url, bunny_stream_video_id, bunny_hls_url, provider')
+          .select('id, playback_url, bunny_cdn_url, provider')
           .in('id', assetIds);
         
         (assets || []).forEach((a: any) => {
@@ -1461,14 +1585,10 @@ export async function getProjects(workspaceId: string): Promise<Project[]> {
         // Priority 1: Get from linked asset
         if (linkedUpload && assetsMap[linkedUpload.asset_id]) {
           const asset = assetsMap[linkedUpload.asset_id];
-          
-          // Priority 1a: asset.bunny_thumbnail_url
-          if (asset.bunny_thumbnail_url) {
-            thumb = asset.bunny_thumbnail_url;
-          }
-          // Priority 1b: Construct from bunny_stream_video_id
-          else if (asset.bunny_stream_video_id && asset.provider !== 'cloudflare' && !asset.bunny_hls_url?.includes('videodelivery.net')) {
-            thumb = constructBunnyThumbnail(asset.bunny_stream_video_id, version.file_url);
+
+          thumb = deriveAssetThumbFromPlaybackUrl(asset.playback_url);
+          if (!thumb && asset.bunny_cdn_url) {
+            thumb = asset.bunny_cdn_url;
           }
         }
         
@@ -1607,7 +1727,7 @@ export async function getProjectDeliverables(
       if (assetIds.length > 0) {
         const {data: assets} = await supabase
           .from('assets')
-          .select('id, bunny_thumbnail_url, bunny_stream_video_id, bunny_hls_url, provider')
+          .select('id, playback_url, bunny_cdn_url, provider')
           .in('id', assetIds);
         
         (assets || []).forEach((a: any) => {
@@ -1635,14 +1755,10 @@ export async function getProjectDeliverables(
         
         if (linkedUpload && assetMap[linkedUpload.asset_id]) {
           const asset = assetMap[linkedUpload.asset_id];
-          
-          // Try bunny_thumbnail_url first
-          if (asset.bunny_thumbnail_url) {
-            thumb = asset.bunny_thumbnail_url;
-          }
-          // Construct from bunny_stream_video_id (use file_url to detect region)
-          else if (asset.bunny_stream_video_id && asset.provider !== 'cloudflare' && !asset.bunny_hls_url?.includes('videodelivery.net')) {
-            thumb = constructBunnyThumbnail(asset.bunny_stream_video_id, version.file_url);
+
+          thumb = deriveAssetThumbFromPlaybackUrl(asset.playback_url);
+          if (!thumb && asset.bunny_cdn_url) {
+            thumb = asset.bunny_cdn_url;
           }
         }
         
@@ -1778,12 +1894,9 @@ export interface ProjectResource {
   file_size?: number | null;
   mime_type?: string | null;
   bunny_cdn_url?: string | null;
-  bunny_hls_url?: string | null;
   playback_url?: string | null;
   storage_url?: string | null;
-  r2_url?: string | null;
   file_url?: string | null;
-  bunny_thumbnail_url?: string | null;
   uploaded_at?: string;
   tags?: string[] | null;
   rating?: number | null;
@@ -2096,16 +2209,16 @@ export async function markDeliverableCommentsAsRead(
   versionId?: string,
   markAsRead: boolean = true,
 ): Promise<void> {
-  console.log(`[markDeliverableCommentsAsRead] Starting - deliverableId: ${deliverableId}, versionId: ${versionId || 'none'}, markAsRead: ${markAsRead}`);
-  
+  devLog(`[markDeliverableCommentsAsRead] Starting`, {deliverableId, versionId: versionId || 'none', markAsRead});
+
   const {data: sessionData, error: sessionError} = await supabase.auth.getSession();
-  console.log(`[markDeliverableCommentsAsRead] Session fetch - hasSession: ${!!sessionData.session}, error: ${sessionError?.message || 'none'}`);
-  
+  devLog(`[markDeliverableCommentsAsRead] Session`, {hasSession: !!sessionData.session, error: sessionError?.message || 'none'});
+
   const accessToken = sessionData.session?.access_token;
-  console.log(`[markDeliverableCommentsAsRead] Access token - present: ${!!accessToken}, length: ${accessToken?.length || 0}, preview: ${accessToken ? `${accessToken.substring(0, 20)}...` : 'null'}`);
+  devLog(`[markDeliverableCommentsAsRead] Auth`, {hasToken: !!accessToken});
 
   if (!accessToken) {
-    console.error(`[markDeliverableCommentsAsRead] ERROR - No access token found!`);
+    console.error('[markDeliverableCommentsAsRead] Not authenticated');
     throw new Error('Not authenticated');
   }
 
@@ -2114,10 +2227,8 @@ export async function markDeliverableCommentsAsRead(
     markAsRead,
     versionId: versionId || undefined,
   };
-  
-  console.log(`[markDeliverableCommentsAsRead] Making request to: ${url}`);
-  console.log(`[markDeliverableCommentsAsRead] Request body:`, JSON.stringify(requestBody));
-  console.log(`[markDeliverableCommentsAsRead] Authorization header: Bearer ${accessToken.substring(0, 20)}...`);
+
+  devLog(`[markDeliverableCommentsAsRead] Request`, {url, body: requestBody});
 
   const response = await fetch(
     url,
@@ -2131,11 +2242,11 @@ export async function markDeliverableCommentsAsRead(
     },
   );
 
-  console.log(`[markDeliverableCommentsAsRead] Response status: ${response.status}, ok: ${response.ok}`);
+  devLog(`[markDeliverableCommentsAsRead] Response`, {status: response.status, ok: response.ok});
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => 'Failed to parse error');
-    console.error(`[markDeliverableCommentsAsRead] ERROR - Status: ${response.status}, Body: ${errorText}`);
+    console.error(`[markDeliverableCommentsAsRead] Status: ${response.status}`);
     let error;
     try {
       error = JSON.parse(errorText);
@@ -2145,7 +2256,7 @@ export async function markDeliverableCommentsAsRead(
     throw new Error(error.error || 'Failed to mark comments as read');
   }
   
-  console.log(`[markDeliverableCommentsAsRead] SUCCESS - Comments marked as read`);
+  devLog('[markDeliverableCommentsAsRead] Success');
 }
 
 // Helper function to safely parse JSON responses
@@ -2173,20 +2284,50 @@ async function parseJSONResponse(response: Response): Promise<any> {
 
 // ===== AI COMMAND =====
 
+/**
+ * Rich tool-result payload returned by the AI command API. The shape is loose because each
+ * tool returns slightly different fields (an event has `eventId` + `start_time`, a series
+ * summary has `series` + `deliverables` + `resources`, etc). We type the well-known
+ * `type` discriminator so the UI can switch on it, and keep the rest as `any` so we don't
+ * have to mirror every server-side field here.
+ */
+export type AICommandData =
+  | {
+      type:
+        | 'todo'
+        | 'event'
+        | 'deliverable'
+        | 'project'
+        | 'workspace_summary'
+        | 'calendar_events'
+        | 'calendar_availability'
+        | 'series_summary'
+        | 'resources'
+        | 'time_lookup'
+        | 'weather'
+        | 'web_search';
+      [key: string]: any;
+    }
+  | {[key: string]: any};
+
 export interface AICommandResult {
   success: boolean;
   message: string;
   isAnswer?: boolean; // Flag to indicate this is an answer/clarification, not a completed action
-  data?: {
-    type: 'todo' | 'event' | 'deliverable' | 'project';
-    id?: string;
-    title?: string;
-    name?: string;
-    eventId?: string;
-  };
+  data?: AICommandData;
+  editUrl?: string;
 }
 
 export type AICommandTurn = {role: 'user' | 'assistant'; content: string};
+
+/** Mirrors the backend's `lastCreatedItem` shape — the chat tracks the last creation so
+ *  follow-up corrections like "actually it's between 4pm and 6pm" can route to update_*. */
+export type AILastCreatedItem = {
+  type: 'todo' | 'event' | 'deliverable' | 'project';
+  id?: string;
+  eventId?: string;
+  name?: string;
+};
 
 export async function executeAICommand(
   command: string,
@@ -2194,6 +2335,7 @@ export async function executeAICommand(
   options?: {
     priorConversation?: AICommandTurn[];
     userTimeZone?: string;
+    lastCreatedItem?: AILastCreatedItem | null;
   },
 ): Promise<AICommandResult> {
   const {data: sessionData} = await supabase.auth.getSession();
@@ -2203,11 +2345,9 @@ export async function executeAICommand(
     throw new Error('Not authenticated');
   }
 
-  // Log token for debugging (first 20 chars for security)
-  console.log('🔑 [AI Command] Access Token:', accessToken.substring(0, 20) + '...' + accessToken.substring(accessToken.length - 10));
-  console.log('📤 [AI Command] Request:', {
-    url: `${API_BASE_URL}/api/ai/command`,
-    command,
+  devLog('[AI Command] Request', {
+    hasToken: true,
+    commandLength: command.length,
     workspaceSlug,
     priorConversationCount: options?.priorConversation?.length ?? 0,
   });
@@ -2233,31 +2373,26 @@ export async function executeAICommand(
       workspaceSlug,
       priorConversation: options?.priorConversation ?? [],
       userTimeZone,
+      lastCreatedItem: options?.lastCreatedItem ?? null,
     }),
   });
 
   const data = await parseJSONResponse(response);
 
-  console.log('📥 [AI Command] Response:', {
+  devLog('[AI Command] Response', {
     status: response.status,
-    statusText: response.statusText,
     success: data.success,
-    message: data.message,
+    messagePreview: typeof data.message === 'string' ? data.message.slice(0, 120) : undefined,
   });
 
   if (!response.ok) {
     // Handle both error formats: { error: '...' } and { success: false, message: '...' }
     const errorMessage = data.message || data.error || `Failed to execute command (${response.status})`;
-    console.error('❌ [AI Command] API error:', {
-      status: response.status,
-      statusText: response.statusText,
-      data,
-      errorMessage
-    });
+    console.error('[AI Command] API error', {status: response.status, errorMessage});
     throw new Error(errorMessage);
   }
 
-  console.log('✅ [AI Command] Success:', data.message);
+  devLog('[AI Command] Success');
   return data;
 }
 
@@ -2500,7 +2635,7 @@ export async function getWorkspaceSeries(workspaceId: string): Promise<Series[]>
       if (assetIds.length > 0) {
         const {data: assets} = await supabase
           .from('assets')
-          .select('id, bunny_thumbnail_url, bunny_stream_video_id, bunny_hls_url, provider')
+          .select('id, playback_url, bunny_cdn_url, provider')
           .in('id', assetIds);
         (assets || []).forEach((a: any) => { assetMap[a.id] = a; });
       }
@@ -2513,9 +2648,9 @@ export async function getWorkspaceSeries(workspaceId: string): Promise<Series[]>
         );
         if (linkedUpload && assetMap[linkedUpload.asset_id]) {
           const asset = assetMap[linkedUpload.asset_id];
-          if (asset.bunny_thumbnail_url) thumb = asset.bunny_thumbnail_url;
-          else if (asset.bunny_stream_video_id && asset.provider !== 'cloudflare' && !asset.bunny_hls_url?.includes('videodelivery.net')) {
-            thumb = constructBunnyThumbnail(asset.bunny_stream_video_id, version.file_url);
+          thumb = deriveAssetThumbFromPlaybackUrl(asset.playback_url);
+          if (!thumb && asset.bunny_cdn_url) {
+            thumb = asset.bunny_cdn_url;
           }
         }
         if (!thumb && version.file_url) {
@@ -2606,7 +2741,7 @@ export async function getProjectSeries(projectId: string): Promise<Series[]> {
       if (assetIds.length > 0) {
         const {data: assets} = await supabase
           .from('assets')
-          .select('id, bunny_thumbnail_url, bunny_stream_video_id, bunny_hls_url, provider')
+          .select('id, playback_url, bunny_cdn_url, provider')
           .in('id', assetIds);
 
         (assets || []).forEach((a: any) => {
@@ -2626,10 +2761,9 @@ export async function getProjectSeries(projectId: string): Promise<Series[]> {
 
         if (linkedUpload && assetMap[linkedUpload.asset_id]) {
           const asset = assetMap[linkedUpload.asset_id];
-          if (asset.bunny_thumbnail_url) {
-            thumb = asset.bunny_thumbnail_url;
-          } else if (asset.bunny_stream_video_id && asset.provider !== 'cloudflare' && !asset.bunny_hls_url?.includes('videodelivery.net')) {
-            thumb = constructBunnyThumbnail(asset.bunny_stream_video_id, version.file_url);
+          thumb = deriveAssetThumbFromPlaybackUrl(asset.playback_url);
+          if (!thumb && asset.bunny_cdn_url) {
+            thumb = asset.bunny_cdn_url;
           }
         }
 
@@ -2719,7 +2853,7 @@ export async function getSeriesItems(seriesId: string): Promise<Deliverable[]> {
       if (assetIds.length > 0) {
         const {data: assets} = await supabase
           .from('assets')
-          .select('id, bunny_thumbnail_url, bunny_stream_video_id, bunny_hls_url, provider')
+          .select('id, playback_url, bunny_cdn_url, provider')
           .in('id', assetIds);
 
         (assets || []).forEach((a: any) => {
@@ -2738,10 +2872,9 @@ export async function getSeriesItems(seriesId: string): Promise<Deliverable[]> {
 
         if (linkedUpload && assetMap[linkedUpload.asset_id]) {
           const asset = assetMap[linkedUpload.asset_id];
-          if (asset.bunny_thumbnail_url) {
-            thumb = asset.bunny_thumbnail_url;
-          } else if (asset.bunny_stream_video_id && asset.provider !== 'cloudflare' && !asset.bunny_hls_url?.includes('videodelivery.net')) {
-            thumb = constructBunnyThumbnail(asset.bunny_stream_video_id, version.file_url);
+          thumb = deriveAssetThumbFromPlaybackUrl(asset.playback_url);
+          if (!thumb && asset.bunny_cdn_url) {
+            thumb = asset.bunny_cdn_url;
           }
         }
 

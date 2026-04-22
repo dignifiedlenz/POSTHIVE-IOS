@@ -25,6 +25,7 @@ import {theme} from '../../theme';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useAuth} from '../../hooks/useAuth';
 import {getTransferHistory, TransferOperation} from '../../lib/api';
+import {WidgetModule} from '../../lib/WidgetModule';
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -60,6 +61,18 @@ export function TransferHistoryScreen() {
     try {
       const data = await getTransferHistory(currentWorkspace.id);
       setTransfers(data);
+      WidgetModule.updateRecentTransfers(
+        data.slice(0, 5).map(transfer => ({
+          id: transfer.id,
+          fileName:
+            transfer.transfer_name ||
+            transfer.project_name ||
+            transfer.operation_type ||
+            'Transfer',
+          isUpload: transfer.operation_type?.toLowerCase().includes('upload') ?? false,
+          completedAt: transfer.completed_at || transfer.started_at,
+        })),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load transfer history');
     } finally {
@@ -159,7 +172,7 @@ export function TransferHistoryScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}

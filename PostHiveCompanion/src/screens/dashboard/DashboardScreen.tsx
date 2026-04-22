@@ -8,20 +8,22 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Image,
-  Dimensions,
   Alert,
   Modal,
   Animated,
   Easing,
 } from 'react-native';
-import {SafeAreaView} from 'react-native-safe-area-context';
-import {useNavigation, useFocusEffect} from '@react-navigation/native';
+import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
+import LinearGradient from 'react-native-linear-gradient';
+import {useNavigation, useFocusEffect, CompositeNavigationProp} from '@react-navigation/native';
 import {StackNavigationProp} from '@react-navigation/stack';
-import {Film, ChevronRight, CheckSquare, Check, Plus, Bell, CheckCheck, X, ChevronDown, Zap, Calendar, MapPin, Video, Edit2, Save, Clock, Camera, CheckCircle} from 'lucide-react-native';
-import {formatDistanceToNow, format, isToday, isTomorrow, parseISO} from 'date-fns';
+import {BottomTabNavigationProp} from '@react-navigation/bottom-tabs';
+import {ChevronRight, CheckSquare, Check, Plus, Bell, CheckCheck, X, Calendar, MapPin, Video as VideoIcon, Edit2, Save, Clock, Camera, CheckCircle} from 'lucide-react-native';
+import {format, isToday, isTomorrow, parseISO} from 'date-fns';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {Platform, TextInput} from 'react-native';
-import LinearGradient from 'react-native-linear-gradient';
+import {BlurView} from '@react-native-community/blur';
+import Video from 'react-native-video';
 import {theme} from '../../theme';
 import {useAuth} from '../../hooks/useAuth';
 import {useDeliverables} from '../../hooks/useDeliverables';
@@ -31,155 +33,79 @@ import {useCalendarDayData} from '../../hooks/useCalendarDayData';
 import {useWidgetSync} from '../../hooks/useWidgetSync';
 import {TodoItem} from '../../components/TodoItem';
 import {NotificationItem} from '../../components/NotificationItem';
-import {capitalizeFirst} from '../../lib/utils';
+import {capitalizeFirst, canAccessWorkspaceNotifications} from '../../lib/utils';
 import {VoiceCommandModal} from '../../components/VoiceCommandModal';
-import {FocusModeModal} from '../../components/FocusModeModal';
-import {Deliverable, Todo, Notification, CalendarEvent, Workspace} from '../../lib/types';
+import {Deliverable, Todo, Notification, CalendarEvent} from '../../lib/types';
 import {DashboardStackParamList} from '../../app/App';
-import {updateTodo, markDeliverableAsFinal} from '../../lib/api';
+import {updateTodo, markDeliverableAsFinal, getDeliverable} from '../../lib/api';
 import {CongratulationsModal} from '../../components/CongratulationsModal';
-import {WorkspaceDropdownModal} from '../../components/WorkspaceDropdownModal';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
+import {useTabBar} from '../../contexts/TabBarContext';
+import type {MainTabParamList} from '../../app/App';
 
-type NavigationProp = StackNavigationProp<DashboardStackParamList, 'DashboardMain'>;
-
-const {width: SCREEN_WIDTH} = Dimensions.get('window');
-// Match webapp: 320px width, 160px height (ProjectDeliverableCard / WorkspaceDeliverablesHorizontalScroll)
-const CARD_WIDTH = Math.min(320, SCREEN_WIDTH * 0.85);
-const CARD_HEIGHT = 160;
-
-interface DeliverableCardProps {
-  deliverable: Deliverable;
-  onPress: () => void;
-  isFirst?: boolean;
-}
-
-function formatDueDateShort(dateString?: string | null): string | null {
-  if (!dateString) return null;
-  try {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
-  } catch {
-    return null;
-  }
-}
-
-function HorizontalDeliverableCard({deliverable, onPress, isFirst}: DeliverableCardProps) {
-  const hasUnreadComments =
-    deliverable.unread_comment_count != null && deliverable.unread_comment_count > 0;
-  const isGallery = deliverable.type === 'image_gallery';
-  const isAudio = deliverable.type === 'audio';
-  const isPdf = deliverable.type === 'pdf';
-  const isDocument = deliverable.type === 'document';
-
-  const timeAgo = deliverable.updated_at
-    ? formatDistanceToNow(new Date(deliverable.updated_at), {addSuffix: true})
-    : null;
-  const dueDateShort = formatDueDateShort(deliverable.due_date);
-
-  // Version label - match webapp ProjectDeliverableCard
-  const versionLabel = deliverable.current_version === 100
-    ? 'FINAL'
-    : isGallery
-      ? 'GALLERY'
-      : isAudio || isPdf
-        ? `V${deliverable.current_version ?? 1}`
-        : isDocument
-          ? 'DOC'
-          : deliverable.current_version != null
-            ? `V${deliverable.current_version}`
-            : null;
-
-  return (
-    <TouchableOpacity
-      style={[styles.card, isFirst && styles.cardFirst]}
-      onPress={onPress}
-      activeOpacity={0.95}>
-      {/* Thumbnail - full cover */}
-      {deliverable.thumbnail_url ? (
-        <Image
-          source={{uri: deliverable.thumbnail_url}}
-          style={styles.thumbnail}
-          resizeMode="cover"
-        />
-      ) : (
-        <View style={styles.thumbnailPlaceholder}>
-          {isAudio ? (
-            <Film size={40} color="rgba(255,255,255,0.3)" />
-          ) : isDocument ? (
-            <Film size={40} color="rgba(255,255,255,0.3)" />
-          ) : (
-            <Film size={40} color={theme.colors.textMuted} />
-          )}
-        </View>
-      )}
-
-      {/* Gradient overlay - match webapp: from-black/90 via-black/30 to-transparent */}
-      <LinearGradient
-        colors={['transparent', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.9)']}
-        locations={[0, 0.4, 1]}
-        style={styles.bottomGradient}
-      />
-
-      {/* Content - match webapp layout */}
-      <View style={styles.cardContent}>
-        {/* Top row: version badge + unread */}
-        <View style={styles.cardTopRow}>
-          {versionLabel && (
-            <Text style={styles.versionText}>{versionLabel}</Text>
-          )}
-          {hasUnreadComments && (
-            <View style={styles.unreadBadge}>
-              <Text style={styles.unreadCount}>{deliverable.unread_comment_count}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Title section: project name + deliverable name */}
-        <View style={styles.titleSection}>
-          {deliverable.project_name && (
-            <Text style={styles.projectName} numberOfLines={1}>
-              {deliverable.project_name.toUpperCase()}
-            </Text>
-          )}
-          <View style={styles.titleRow}>
-            <Text style={styles.deliverableName} numberOfLines={1}>
-              {deliverable.name}
-            </Text>
-            {hasUnreadComments && (
-              <Text style={styles.unreadInline}>{deliverable.unread_comment_count}</Text>
-            )}
-          </View>
-        </View>
-
-        {/* Bottom row: comments + due date */}
-        <View style={styles.cardBottomRow}>
-          <Text style={styles.metaText}>
-            {deliverable.comment_count ?? deliverable.unread_comment_count ?? 0} COMMENTS
-          </Text>
-          {(dueDateShort || timeAgo) && (
-            <Text style={styles.metaText}>{dueDateShort || timeAgo}</Text>
-          )}
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-}
+type NavigationProp = CompositeNavigationProp<
+  StackNavigationProp<DashboardStackParamList, 'Dashboard'>,
+  BottomTabNavigationProp<MainTabParamList>
+>;
+const DEFAULT_THUMBNAIL = 'https://www.posthive.app/thumbnail/default.png';
 
 export function DashboardScreen() {
   const navigation = useNavigation<NavigationProp>();
   const scrollViewRef = React.useRef<ScrollView>(null);
-  
-  // Staggered entrance animations
+  const {pendingOpenCreateTodo, setPendingOpenCreateTodo} = useTabBar();
+  const insets = useSafeAreaInsets();
+  // The dashboard renders inside `mainPagerContent` which has `paddingTop = insets.top + 64`
+  // (see AuthenticatedChrome / MAIN_FLOATING_TOP_BAR_EXTRA in App.tsx). To make the blurred
+  // hero backdrop cover the WHOLE screen — including under the floating top bar and status
+  // bar — we extend it upward by the same amount via a negative top offset.
+  const heroBackdropTopOffset = -(insets.top + 64);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (pendingOpenCreateTodo) {
+        setPendingOpenCreateTodo(false);
+        navigation.navigate('CreateTodo');
+      }
+    }, [pendingOpenCreateTodo, setPendingOpenCreateTodo, navigation]),
+  );
+
   const sectionAnimations = useRef([
-    new Animated.Value(0), // Hero
-    new Animated.Value(0), // Deliverables
-    new Animated.Value(0), // Upcoming Event
-    new Animated.Value(0), // Upcoming Timeline
+    new Animated.Value(0), // Calendar / next up
     new Animated.Value(0), // Tasks
+    new Animated.Value(0), // Deadlines
   ]).current;
-  
-  const {user, currentWorkspace, workspaces, selectWorkspace} = useAuth();
+
+  const {user, currentWorkspace} = useAuth();
+  const workspaceNotificationsEnabled = canAccessWorkspaceNotifications(
+    currentWorkspace?.role,
+  );
+
+  // Time-of-day greeting + best-effort first name pulled from Supabase auth metadata.
+  // Falls back to the local-part of the email so we never render an empty name.
+  const greeting = useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 5) return 'Good night';
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    if (h < 22) return 'Good evening';
+    return 'Good night';
+  }, []);
+  const firstName = useMemo(() => {
+    const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
+    const candidates: Array<unknown> = [
+      meta.first_name,
+      meta.given_name,
+      typeof meta.full_name === 'string' ? meta.full_name.split(' ')[0] : undefined,
+      typeof meta.name === 'string' ? meta.name.split(' ')[0] : undefined,
+      typeof user?.email === 'string' ? user.email.split('@')[0] : undefined,
+    ];
+    const raw = candidates.find(v => typeof v === 'string' && v.trim().length > 0) as
+      | string
+      | undefined;
+    if (!raw) return '';
+    const cleaned = raw.replace(/[._-]+/g, ' ').trim();
+    return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }, [user]);
   const {deliverables, isLoading: deliverablesLoading, isRefreshing: deliverablesRefreshing, refresh: refreshDeliverables} = useDeliverables({
     workspaceId: currentWorkspace?.id || '',
     userId: user?.id || '',
@@ -207,6 +133,7 @@ export function DashboardScreen() {
   } = useNotifications({
     workspaceId: currentWorkspace?.id || '',
     userId: user?.id || '',
+    enabled: workspaceNotificationsEnabled,
   });
 
   const {calendarEvents, refresh: refreshCalendar} = useCalendarDayData({
@@ -223,6 +150,10 @@ export function DashboardScreen() {
       const params = route?.params as {openNotifications?: boolean} | undefined;
       
       if (params?.openNotifications) {
+        if (!workspaceNotificationsEnabled) {
+          navigation.setParams({openNotifications: undefined});
+          return;
+        }
         // Small delay to ensure screen is fully mounted
         setTimeout(() => {
           setShowNotifications(true);
@@ -233,7 +164,7 @@ export function DashboardScreen() {
     });
 
     return unsubscribe;
-  }, [navigation]);
+  }, [navigation, workspaceNotificationsEnabled]);
 
   // Refresh data and scroll to top when screen comes into focus
   useFocusEffect(
@@ -260,7 +191,13 @@ export function DashboardScreen() {
         refreshDeliverables();
         refreshCalendar();
       }
-    }, [refreshTodos, refreshDeliverables, refreshCalendar, todosLoading, deliverablesLoading])
+    }, [
+      refreshTodos,
+      refreshDeliverables,
+      refreshCalendar,
+      todosLoading,
+      deliverablesLoading,
+    ])
   );
 
   // Animation states for tasks
@@ -271,10 +208,12 @@ export function DashboardScreen() {
   const [selectedTodo, setSelectedTodo] = useState<Todo | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [showFocusMode, setShowFocusMode] = useState(false);
   const [showVoiceCommand, setShowVoiceCommand] = useState(false);
   const [showCongratulations, setShowCongratulations] = useState(false);
-  const [showWorkspaceDropdown, setShowWorkspaceDropdown] = useState(false);
+  // Keep hook ordering stable during Fast Refresh after removing the
+  // dashboard-level workspace picker UI.
+  const workspaceDropdownRefreshState = useState(false);
+  void workspaceDropdownRefreshState;
   const [completedTodoTitle, setCompletedTodoTitle] = useState<string | null>(null);
   const [finalizingDeliverableId, setFinalizingDeliverableId] = useState<string | null>(null);
 
@@ -364,9 +303,6 @@ export function DashboardScreen() {
     activities: widgetActivities,
   });
 
-  // Active task for Focus Mode - use first in-progress todo
-  const activeTask = inProgressTodos[0] || null;
-
   // Find the next upcoming event
   const nextEvent = useMemo((): CalendarEvent | null => {
     const now = new Date();
@@ -431,21 +367,57 @@ export function DashboardScreen() {
   const isLoading = deliverablesLoading || todosLoading;
   const isRefreshing = deliverablesRefreshing || todosRefreshing;
 
+  // If the most recent deliverable is a video, lazily resolve its HLS playback URL so we
+  // can autoplay it (muted + looping) underneath the blur. Falls back to the still
+  // thumbnail above whenever a stream isn't available or is still processing.
+  // NOTE: These hooks must be declared BEFORE any conditional early return below
+  // (e.g. the `if (isLoading)` guard) to keep hook ordering stable across renders.
+  const latestVideoDeliverable = useMemo(
+    () => sortedDeliverables.find(d => d.type === 'video'),
+    [sortedDeliverables],
+  );
+  const [heroVideoUrl, setHeroVideoUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setHeroVideoUrl(null);
+    if (!latestVideoDeliverable?.id) return;
+    (async () => {
+      try {
+        const full = await getDeliverable(latestVideoDeliverable.id);
+        if (cancelled) return;
+        const url = full?.latest_version?.file_url;
+        // Only autoplay HLS streams — direct mp4/r2 downloads can be huge and we don't want
+        // to hammer the network on the dashboard.
+        if (url && /\.m3u8($|\?)/i.test(url)) {
+          setHeroVideoUrl(url);
+        }
+      } catch {
+        // Stream lookup failed — silently fall back to the thumbnail.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [latestVideoDeliverable?.id]);
+
   const refresh = useCallback(async () => {
-    await Promise.all([refreshDeliverables(), refreshTodos()]);
-  }, [refreshDeliverables, refreshTodos]);
+    await Promise.all([refreshDeliverables(), refreshTodos(), refreshCalendar()]);
+  }, [refreshDeliverables, refreshTodos, refreshCalendar]);
 
   const handleDeliverablePress = useCallback(
     (deliverable: Deliverable) => {
-      navigation.navigate('DeliverableReview', {
+      // DeliverableReview lives on the root stack now, so we cast to bypass the
+      // narrower stack-typed signature; React Navigation bubbles the route up.
+      (navigation as any).navigate('DeliverableReview', {
         deliverableId: deliverable.id,
       });
     },
     [navigation],
   );
 
-  const handleSeeAll = useCallback(() => {
-    navigation.getParent()?.navigate('ReviewTab');
+  const openCalendarPager = useCallback(() => {
+    navigation.navigate('Calendar', {screen: 'Calendar'});
   }, [navigation]);
 
   const handleFinalizeDeliverable = useCallback(
@@ -564,7 +536,7 @@ export function DashboardScreen() {
       
       // Comment or version notifications - go to deliverable
       if (deliverable_id) {
-        navigation.navigate('DeliverableReview', {
+        (navigation as any).navigate('DeliverableReview', {
           deliverableId: deliverable_id,
           versionId: version_id,
           commentId: comment_id,
@@ -572,28 +544,14 @@ export function DashboardScreen() {
         return;
       }
       
-      // Project notifications - go to projects tab
       if (project_id) {
-        navigation.getParent()?.navigate('ReviewTab', {
-          screen: 'ProjectDeliverables',
-          params: {
-            projectId: project_id,
-            projectName: (notification.data?.project_name as string) || 'Project',
-          },
+        navigation.navigate('ProjectDeliverables', {
+          projectId: project_id,
+          projectName: (notification.data?.project_name as string) || 'Project',
         });
       }
     },
     [navigation, markSeen],
-  );
-
-  const renderEmptyDeliverables = () => (
-    <View style={styles.emptyState}>
-      <Film size={40} color={theme.colors.textMuted} />
-      <Text style={styles.emptyTitle}>NO DELIVERABLES</Text>
-      <Text style={styles.emptySubtitle}>
-        Recent deliverables will appear here
-      </Text>
-    </View>
   );
 
   const renderEmptyTasks = () => (
@@ -610,8 +568,66 @@ export function DashboardScreen() {
     return <BrandedLoadingScreen />;
   }
 
+  // Most recent deliverable thumbnail drives the hero backdrop. Falls back to the default
+  // PostHive thumbnail when nothing is available yet.
+  const heroThumbnailUri =
+    sortedDeliverables.find(d => d.thumbnail_url)?.thumbnail_url || DEFAULT_THUMBNAIL;
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      {/* Blurred latest-deliverable backdrop with a dark overlay — covers the whole screen
+          so the foreground content (Next Up / Tasks / Deadlines) sits cleanly on top. When
+          the most recent deliverable is a video with a ready HLS stream, that's autoplayed
+          (muted + looping) underneath the blur; otherwise the still thumbnail is used. */}
+      <View
+        style={[styles.heroBackdrop, {top: heroBackdropTopOffset}]}
+        pointerEvents="none">
+        <Image
+          source={{uri: heroThumbnailUri}}
+          style={styles.heroImage}
+          resizeMode="cover"
+          // Native blur on Android; iOS uses BlurView below for a higher-quality effect.
+          blurRadius={Platform.OS === 'android' ? 12 : 0}
+        />
+        {/* Video (iOS only — Android lacks the BlurView path that gives us the nice frosted
+            look on top of moving footage; we keep the still thumbnail there instead). */}
+        {Platform.OS === 'ios' && heroVideoUrl ? (
+          <Video
+            source={{uri: heroVideoUrl, type: 'm3u8'}}
+            style={StyleSheet.absoluteFillObject}
+            resizeMode="cover"
+            muted
+            repeat
+            paused={false}
+            playInBackground={false}
+            playWhenInactive={false}
+            ignoreSilentSwitch="ignore"
+            controls={false}
+            disableFocus
+          />
+        ) : null}
+        {Platform.OS === 'ios' && (
+          <BlurView
+            style={StyleSheet.absoluteFillObject}
+            blurType="dark"
+            blurAmount={14}
+            reducedTransparencyFallbackColor="#0A0A0A"
+          />
+        )}
+        <View style={styles.heroDarkOverlay} />
+        {/* Soft fade at the very top so the status bar / top-bar icons remain readable
+            against the blurred image without painting a hard black band. */}
+        <LinearGradient
+          colors={['rgba(0,0,0,0.55)', 'rgba(0,0,0,0.18)', 'rgba(0,0,0,0)']}
+          locations={[0, 0.6, 1]}
+          style={[
+            styles.heroTopFade,
+            {height: insets.top + 64 + 32},
+          ]}
+          pointerEvents="none"
+        />
+      </View>
+
       <ScrollView
         ref={scrollViewRef}
         style={styles.scrollView}
@@ -623,113 +639,50 @@ export function DashboardScreen() {
             tintColor={theme.colors.textPrimary}
           />
         }>
-        {/* Hero section with workspace name and bell icon */}
-        <Animated.View style={[styles.heroSection, {
-          opacity: sectionAnimations[0],
-          transform: [{translateY: sectionAnimations[0].interpolate({
-            inputRange: [0, 1],
-            outputRange: [15, 0],
-          })}],
-        }]}>
-          <View style={styles.heroHeader}>
-            <TouchableOpacity
-              style={styles.workspaceButton}
-              onPress={() => setShowWorkspaceDropdown(true)}
-              activeOpacity={0.7}>
-              <Text style={styles.workspaceName} numberOfLines={1}>
-                {currentWorkspace?.name || 'Workspace'}
-              </Text>
-              <ChevronDown size={16} color={theme.colors.textMuted} />
-            </TouchableOpacity>
-            <View style={styles.headerIcons}>
-              {/* Focus Mode button */}
-              <TouchableOpacity
-                style={styles.iconButton}
-                onPress={() => setShowFocusMode(true)}
-                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                <Zap size={22} color={theme.colors.textMuted} />
-              </TouchableOpacity>
-              
-              {/* Notifications button */}
-              <TouchableOpacity
-                style={styles.bellButton}
-                onPress={() => setShowNotifications(true)}
-                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                <Bell size={22} color={theme.colors.textPrimary} />
-                {unreadCount > 0 && (
-                  <View style={styles.bellBadge}>
-                    <Text style={styles.bellBadgeText}>
-                      {unreadCount > 99 ? '99+' : unreadCount}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Animated.View>
-
-        {/* Deliverables section */}
-        <Animated.View style={[styles.section, {
-          opacity: sectionAnimations[1],
-          transform: [{translateY: sectionAnimations[1].interpolate({
-            inputRange: [0, 1],
-            outputRange: [15, 0],
-          })}],
-        }]}>
+        {/* Editorial greeting — Miller Banner Light Italic, centered above NEXT UP. */}
+        <View style={styles.greetingSection} pointerEvents="none">
+          <Text style={styles.greetingText} numberOfLines={1} adjustsFontSizeToFit>
+            {firstName ? `${greeting}, ${firstName}.` : `${greeting}.`}
+          </Text>
+        </View>
+        {/* Calendar — next up */}
+        <Animated.View
+          style={[
+            styles.calendarSection,
+            styles.calendarSectionFirst,
+            {
+              opacity: sectionAnimations[0],
+              transform: [
+                {
+                  translateY: sectionAnimations[0].interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [15, 0],
+                  }),
+                },
+              ],
+            },
+          ]}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionLabel}>RECENT DELIVERABLES</Text>
-            {sortedDeliverables.length > 0 && (
-              <TouchableOpacity 
-                style={styles.seeAllButton}
-                onPress={handleSeeAll}>
-                <Text style={styles.seeAllText}>SEE ALL</Text>
-                <ChevronRight size={12} color={theme.colors.textMuted} />
-              </TouchableOpacity>
-            )}
+            <Text style={styles.sectionLabel}>NEXT UP</Text>
           </View>
-
-          {sortedDeliverables.length > 0 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.horizontalList}
-              decelerationRate="fast"
-              snapToInterval={CARD_WIDTH + theme.spacing.md}
-              snapToAlignment="start">
-              {sortedDeliverables.map((item, index) => (
-                <HorizontalDeliverableCard
-                  key={item.id}
-                  deliverable={item}
-                  onPress={() => handleDeliverablePress(item)}
-                  isFirst={index === 0}
-                />
-              ))}
-            </ScrollView>
-          ) : (
-            renderEmptyDeliverables()
-          )}
-        </Animated.View>
-
-        {/* Upcoming Event Section */}
-        {nextEvent && (
-          <Animated.View style={[styles.upcomingEventSection, {
-            opacity: sectionAnimations[2],
-            transform: [{translateY: sectionAnimations[2].interpolate({
-              inputRange: [0, 1],
-              outputRange: [15, 0],
-            })}],
-          }]}>
-            <TouchableOpacity 
+          {nextEvent ? (
+            <TouchableOpacity
               style={styles.upcomingEventCard}
               onPress={() => {
                 const eventStart = parseISO(nextEvent.start_time);
                 const timeString = format(eventStart, 'HH:mm');
-                navigation.getParent()?.navigate('CalendarTab', {
-                  date: eventStart.toISOString(),
-                  scrollToTime: timeString,
+                navigation.navigate('Calendar', {
+                  screen: 'Calendar',
+                  params: {
+                    date: eventStart.toISOString(),
+                    scrollToTime: timeString,
+                  },
                 });
               }}
               activeOpacity={0.8}>
+              <View style={styles.calendarIconBadge}>
+                <Calendar size={18} color={theme.colors.textPrimary} />
+              </View>
               <View style={styles.upcomingEventContent}>
                 <View style={styles.upcomingEventTitleRow}>
                   <Text style={styles.upcomingEventTitle} numberOfLines={1}>
@@ -740,9 +693,7 @@ export function DashboardScreen() {
                   )}
                 </View>
                 <View style={styles.upcomingEventMeta}>
-                  <Text style={styles.upcomingEventTime}>
-                    {formatEventTime(nextEvent)}
-                  </Text>
+                  <Text style={styles.upcomingEventTime}>{formatEventTime(nextEvent)}</Text>
                   {nextEvent.location && (
                     <View style={styles.upcomingEventLocation}>
                       <MapPin size={10} color={theme.colors.textMuted} />
@@ -755,20 +706,34 @@ export function DashboardScreen() {
               </View>
               <ChevronRight size={16} color={theme.colors.textMuted} />
             </TouchableOpacity>
-          </Animated.View>
-        )}
+          ) : (
+            <TouchableOpacity
+              style={styles.upcomingEventCard}
+              onPress={openCalendarPager}
+              activeOpacity={0.8}>
+              <View style={styles.calendarIconBadge}>
+                <Calendar size={18} color={theme.colors.textMuted} />
+              </View>
+              <View style={styles.upcomingEventContent}>
+                <Text style={styles.upcomingEventTitle}>Calendar</Text>
+                <Text style={styles.upcomingEventTime}>No upcoming events — open schedule</Text>
+              </View>
+              <ChevronRight size={16} color={theme.colors.textMuted} />
+            </TouchableOpacity>
+          )}
+        </Animated.View>
 
         {/* Tasks section */}
         <Animated.View style={[
           styles.tasksSection,
           (upcomingDeadlines.length === 0 && pastDeadlines.length === 0) && styles.tasksSectionLast,
           {
-            opacity: sectionAnimations[4],
-            transform: [{translateY: sectionAnimations[4].interpolate({
+            opacity: sectionAnimations[1],
+            transform: [{translateY: sectionAnimations[1].interpolate({
               inputRange: [0, 1],
               outputRange: [15, 0],
             })}],
-          }
+          },
         ]}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionLabel}>TASKS</Text>
@@ -796,8 +761,8 @@ export function DashboardScreen() {
         {/* Deliverable Deadlines - Upcoming and Past */}
         {(upcomingDeadlines.length > 0 || pastDeadlines.length > 0) && (
           <Animated.View style={[styles.deadlineSection, {
-            opacity: sectionAnimations[3],
-            transform: [{translateY: sectionAnimations[3].interpolate({
+            opacity: sectionAnimations[2],
+            transform: [{translateY: sectionAnimations[2].interpolate({
               inputRange: [0, 1],
               outputRange: [15, 0],
             })}],
@@ -970,27 +935,17 @@ export function DashboardScreen() {
         }}
       />
 
-      {/* Notifications Modal */}
-      <NotificationsModal
-        visible={showNotifications}
-        notifications={notifications}
-        unreadCount={unreadCount}
-        onClose={() => setShowNotifications(false)}
-        onNotificationPress={handleNotificationPress}
-        onMarkAllSeen={markAllSeen}
-      />
-
-      {/* Focus Mode Modal */}
-      <FocusModeModal
-        visible={showFocusMode}
-        task={activeTask}
-        onClose={() => setShowFocusMode(false)}
-        onComplete={() => {
-          if (activeTask) {
-            toggleStatus(activeTask);
-          }
-        }}
-      />
+      {/* Notifications Modal — hidden for workspace editors */}
+      {workspaceNotificationsEnabled && (
+        <NotificationsModal
+          visible={showNotifications}
+          notifications={notifications}
+          unreadCount={unreadCount}
+          onClose={() => setShowNotifications(false)}
+          onNotificationPress={handleNotificationPress}
+          onMarkAllSeen={markAllSeen}
+        />
+      )}
 
       {/* Congratulations Modal */}
       <CongratulationsModal
@@ -1005,17 +960,6 @@ export function DashboardScreen() {
         }}
       />
 
-      {/* Workspace Dropdown Modal */}
-      <WorkspaceDropdownModal
-        visible={showWorkspaceDropdown}
-        workspaces={workspaces}
-        currentWorkspace={currentWorkspace}
-        onSelectWorkspace={(workspace) => {
-          selectWorkspace(workspace);
-          setShowWorkspaceDropdown(false);
-        }}
-        onClose={() => setShowWorkspaceDropdown(false)}
-      />
     </SafeAreaView>
   );
 }
@@ -1796,60 +1740,6 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
   },
-  heroSection: {
-    paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.lg,
-    paddingBottom: theme.spacing.xl,
-  },
-  heroHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  workspaceButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flex: 1,
-    marginRight: theme.spacing.md,
-  },
-  workspaceName: {
-    color: theme.colors.textPrimary,
-    fontSize: 20,
-    fontFamily: theme.typography.fontFamily.bold,
-    flexShrink: 1,
-  },
-  headerIcons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
-  },
-  iconButton: {
-    padding: theme.spacing.xs,
-  },
-  bellButton: {
-    position: 'relative',
-    padding: theme.spacing.xs,
-  },
-  bellBadge: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    backgroundColor: theme.colors.error,
-    minWidth: 16,
-    height: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-  },
-  bellBadgeText: {
-    color: theme.colors.textPrimary,
-    fontSize: 9,
-    fontWeight: '700',
-  },
-  section: {
-    marginBottom: theme.spacing.xl,
-  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1863,143 +1753,63 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily.semibold,
     letterSpacing: 1.5,
   },
-  seeAllButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
-  seeAllText: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 1,
-  },
-  horizontalList: {
-    paddingLeft: theme.spacing.md,
-    paddingRight: theme.spacing.xl,
-    gap: theme.spacing.md,
-  },
-  card: {
-    width: CARD_WIDTH,
-    height: CARD_HEIGHT,
-    position: 'relative',
+  heroBackdrop: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    // `top` is set dynamically (see DashboardScreen) so the backdrop extends
+    // above the parent's safe-area + top-bar padding, covering the full screen.
     overflow: 'hidden',
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    backgroundColor: '#0A0A0A',
   },
-  cardFirst: {},
-  thumbnail: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: theme.colors.surface,
-    opacity: 0.8,
-  },
-  thumbnailPlaceholder: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bottomGradient: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
+  heroImage: {
+    width: '100%',
     height: '100%',
+    transform: [{scale: 1.05}],
   },
-  cardContent: {
+  heroDarkOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(10,10,10,0.55)',
+  },
+  heroTopFade: {
     position: 'absolute',
+    top: 0,
     left: 0,
     right: 0,
-    bottom: 0,
-    top: 0,
-    padding: theme.spacing.md,
-    justifyContent: 'space-between',
   },
-  cardTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  versionText: {
-    color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: 10,
-    fontFamily: theme.typography.fontFamily.medium,
-    letterSpacing: 1.4,
-  },
-  unreadBadge: {
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  unreadCount: {
-    color: theme.colors.textPrimary,
-    fontSize: 9,
-    fontFamily: theme.typography.fontFamily.bold,
-  },
-  titleSection: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    paddingBottom: theme.spacing.xs,
-  },
-  projectName: {
-    color: 'rgba(255, 255, 255, 0.5)',
-    fontSize: 10,
-    fontFamily: theme.typography.fontFamily.medium,
-    letterSpacing: 1,
-    marginBottom: 2,
-  },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.xs,
-  },
-  deliverableName: {
-    flex: 1,
-    color: theme.colors.textPrimary,
-    fontSize: 18,
-    fontFamily: theme.typography.fontFamily.semibold,
-    lineHeight: 22,
-  },
-  unreadInline: {
-    color: theme.colors.primary,
-    fontSize: 14,
-    fontFamily: theme.typography.fontFamily.bold,
-  },
-  cardBottomRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  metaText: {
-    color: 'rgba(255, 255, 255, 0.6)',
-    fontSize: 10,
-    fontFamily: theme.typography.fontFamily.medium,
-    letterSpacing: 1.2,
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: theme.spacing.xxl,
-    marginHorizontal: theme.spacing.md,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: theme.colors.borderHover,
-  },
-  emptyTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: 11,
-    fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 2,
-    marginTop: theme.spacing.md,
-  },
-  emptySubtitle: {
-    color: theme.colors.textMuted,
-    fontSize: 12,
-    textAlign: 'center',
-    marginTop: theme.spacing.sm,
-  },
-  upcomingEventSection: {
+  calendarSection: {
     paddingHorizontal: theme.spacing.md,
     marginBottom: theme.spacing.lg,
+  },
+  calendarSectionFirst: {
+    marginTop: theme.spacing.xs,
+  },
+  greetingSection: {
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.md,
+    paddingBottom: theme.spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  greetingText: {
+    fontFamily: theme.typography.fontFamily.serifItalic,
+    // The OTF is already italic; setting fontStyle here on iOS would request a synthetic
+    // slant on top of the cut and trigger glyph fallback. Leave it off.
+    color: theme.colors.textPrimary,
+    fontSize: 38,
+    lineHeight: 44,
+    letterSpacing: 0.2,
+    textAlign: 'center',
+    opacity: 0.95,
+  },
+  calendarIconBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   upcomingEventCard: {
     flexDirection: 'row',

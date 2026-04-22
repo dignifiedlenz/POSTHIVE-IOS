@@ -1,6 +1,60 @@
-import {useState, useEffect, useCallback} from 'react';
+import {useState, useEffect, useCallback, useRef} from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {supabase} from '../lib/supabase';
 import {Todo, CalendarEvent} from '../lib/types';
+
+// ===== CACHE =====
+// Persistent cache so the calendar grid renders instantly with the previous
+// snapshot while fresh data loads in the background (stale-while-revalidate).
+// Keep version in the key so a shape change invalidates old payloads.
+const CACHE_VERSION = 'v1';
+const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 7; // keep up to 7 days
+
+interface CachedCalendarPayload {
+  v: typeof CACHE_VERSION;
+  cachedAt: number;
+  todos: Todo[];
+  scheduledTasks: ScheduledTask[];
+  calendarEvents: CalendarEvent[];
+  blockedTimes: BlockedTime[];
+  deadlines: Deadline[];
+}
+
+function cacheKey(workspaceId: string, userId: string): string {
+  return `calendar-cache:${CACHE_VERSION}:${workspaceId}:${userId}`;
+}
+
+async function readCache(
+  workspaceId: string,
+  userId: string,
+): Promise<CachedCalendarPayload | null> {
+  try {
+    const raw = await AsyncStorage.getItem(cacheKey(workspaceId, userId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedCalendarPayload;
+    if (parsed.v !== CACHE_VERSION) return null;
+    if (Date.now() - parsed.cachedAt > CACHE_TTL_MS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(
+  workspaceId: string,
+  userId: string,
+  payload: Omit<CachedCalendarPayload, 'v' | 'cachedAt'>,
+): void {
+  // Fire-and-forget; don't block the render loop on disk I/O.
+  const data: CachedCalendarPayload = {
+    v: CACHE_VERSION,
+    cachedAt: Date.now(),
+    ...payload,
+  };
+  AsyncStorage.setItem(cacheKey(workspaceId, userId), JSON.stringify(data)).catch(
+    err => console.warn('[Calendar] Failed to write cache:', err),
+  );
+}
 
 // ===== TYPE DEFINITIONS =====
 
@@ -70,6 +124,10 @@ export function useCalendarDayData({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
+  // Track whether we've hydrated from cache for the current workspace/user so
+  // we don't show a spinner over data we already have on disk.
+  const hydratedRef = useRef<string | null>(null);
+
   const fetchData = useCallback(async () => {
     if (!workspaceId || !userId) {
       setLoading(false);
@@ -77,7 +135,12 @@ export function useCalendarDayData({
     }
 
     try {
-      setLoading(true);
+      // Only show the loading spinner if we have no cached data yet for this
+      // workspace+user pair. Otherwise refresh quietly in the background.
+      const cacheId = `${workspaceId}:${userId}`;
+      if (hydratedRef.current !== cacheId) {
+        setLoading(true);
+      }
       setError(null);
 
       // Fetch all data in parallel using Supabase direct queries
@@ -102,11 +165,23 @@ export function useCalendarDayData({
           .eq('user_id', userId)
           .neq('status', 'skipped'),
 
-        // 3. Fetch calendar events via Supabase (for broader date range)
-        supabase
-          .from('calendar_events')
-          .select('*')
-          .eq('workspace_id', workspaceId),
+        // 3. Fetch calendar events via RPC for a wide range so the month
+        //    grid (and Google-synced calendars) show up. Mirrors the web
+        //    /api/.../calendar/events behavior (joins synced_google_calendars
+        //    and applies visibility/permission rules).
+        (() => {
+          const rangeStart = new Date();
+          rangeStart.setMonth(rangeStart.getMonth() - 25);
+          rangeStart.setHours(0, 0, 0, 0);
+          const rangeEnd = new Date();
+          rangeEnd.setMonth(rangeEnd.getMonth() + 25);
+          rangeEnd.setHours(23, 59, 59, 999);
+          return supabase.rpc('get_calendar_events_for_range', {
+            p_workspace_id: workspaceId,
+            p_start_time: rangeStart.toISOString(),
+            p_end_time: rangeEnd.toISOString(),
+          });
+        })(),
 
         // 4. Fetch blocked times via Supabase
         supabase
@@ -124,16 +199,24 @@ export function useCalendarDayData({
           }),
       ]);
 
+      // Capture next-state values locally so we can persist a single cache
+      // snapshot at the end without re-reading React state.
+      let nextTodos: Todo[] = [];
+      let nextScheduled: ScheduledTask[] = [];
+      let nextEvents: CalendarEvent[] = [];
+      let nextBlocked: BlockedTime[] = [];
+      let nextDeadlines: Deadline[] = [];
+
       // Process todos
       if (todosRes.data) {
-        const processedTodos = todosRes.data.map((todo: any) => ({
+        nextTodos = todosRes.data.map((todo: any) => ({
           ...todo,
           assigned_name: todo.assigned_user?.name,
           project_name: todo.project?.name,
           deliverable_name: todo.deliverable?.name,
         }));
-        setTodos(processedTodos);
-        console.log('[Calendar] Todos loaded:', processedTodos.length);
+        setTodos(nextTodos);
+        console.log('[Calendar] Todos loaded:', nextTodos.length);
       }
 
       // Process scheduled tasks
@@ -142,28 +225,84 @@ export function useCalendarDayData({
           count: scheduledRes.data.length,
           sample: scheduledRes.data[0],
         });
-        setScheduledTasks(scheduledRes.data || []);
+        nextScheduled = scheduledRes.data || [];
+        setScheduledTasks(nextScheduled);
       } else if (scheduledRes.error) {
         console.log('[Calendar] Scheduled tasks error:', scheduledRes.error.message);
-        // Table might not exist, set empty
+        nextScheduled = [];
         setScheduledTasks([]);
       }
 
-      // Process calendar events
+      // Process calendar events (RPC returns merged Google + PostHive events
+      // with calendar_name/color joined from synced_google_calendars).
       if (eventsRes.data) {
-        console.log('[Calendar] Calendar events loaded:', eventsRes.data.length);
-        setCalendarEvents(eventsRes.data || []);
+        const rawEvents = (eventsRes.data || []).map((e: any) => ({
+          id: e.id,
+          workspace_id: workspaceId,
+          source_type: e.source_type,
+          title: e.title,
+          description: e.description,
+          start_time: e.start_time,
+          end_time: e.end_time,
+          is_all_day: e.is_all_day,
+          location: e.location,
+          meeting_link: e.meeting_link,
+          calendar_name: e.calendar_name,
+          calendar_color: e.calendar_color,
+          created_by: e.created_by,
+          project_id: e.project_id,
+          visibility: e.visibility,
+        })) as CalendarEvent[];
+
+        // Dedup: events that appear as both Google and PostHive (same
+        // title + same start/end). Prefer Google (has calendar_color), keep
+        // PostHive's project_id/meeting_link/description if Google missing.
+        const groups = new Map<string, CalendarEvent[]>();
+        for (const ev of rawEvents) {
+          const startNorm = new Date(ev.start_time).getTime();
+          const endNorm = new Date(ev.end_time).getTime();
+          const key = `${ev.title?.trim().toLowerCase() || ''}|${startNorm}|${endNorm}`;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push(ev);
+        }
+        const merged: CalendarEvent[] = [];
+        for (const group of groups.values()) {
+          if (group.length === 1) {
+            merged.push(group[0]);
+            continue;
+          }
+          const google = group.find(e => e.source_type === 'google');
+          const posthive = group.find(e => e.source_type === 'posthive');
+          if (google) {
+            const m = {...google};
+            if (posthive) {
+              if (!m.project_id && posthive.project_id) m.project_id = posthive.project_id;
+              if (!m.meeting_link && posthive.meeting_link) m.meeting_link = posthive.meeting_link;
+              if (!m.description && posthive.description) m.description = posthive.description;
+            }
+            merged.push(m);
+          } else {
+            merged.push(group[0]);
+          }
+        }
+
+        console.log('[Calendar] Calendar events loaded:', merged.length, '(raw:', rawEvents.length, ')');
+        nextEvents = merged;
+        setCalendarEvents(merged);
       } else if (eventsRes.error) {
         console.log('[Calendar] Calendar events error:', eventsRes.error.message);
+        nextEvents = [];
         setCalendarEvents([]);
       }
 
       // Process blocked times
       if (blockedRes.data) {
         console.log('[Calendar] Blocked times loaded:', blockedRes.data.length);
-        setBlockedTimes(blockedRes.data || []);
+        nextBlocked = blockedRes.data || [];
+        setBlockedTimes(nextBlocked);
       } else if (blockedRes.error) {
         console.log('[Calendar] Blocked times error:', blockedRes.error.message);
+        nextBlocked = [];
         setBlockedTimes([]);
       }
 
@@ -178,17 +317,56 @@ export function useCalendarDayData({
           version: d.version || undefined,
         }));
         console.log('[Calendar] Deadlines loaded:', processedDeadlines.length);
+        nextDeadlines = processedDeadlines;
         setDeadlines(processedDeadlines);
       } else if (deadlinesRes.error) {
         console.log('[Calendar] Deadlines error:', deadlinesRes.error.message);
+        nextDeadlines = [];
         setDeadlines([]);
       }
+
+      // Persist a fresh snapshot for the next cold-start.
+      hydratedRef.current = `${workspaceId}:${userId}`;
+      writeCache(workspaceId, userId, {
+        todos: nextTodos,
+        scheduledTasks: nextScheduled,
+        calendarEvents: nextEvents,
+        blockedTimes: nextBlocked,
+        deadlines: nextDeadlines,
+      });
     } catch (err) {
       console.error('[Calendar] Error fetching data:', err);
       setError(err instanceof Error ? err : new Error('Failed to fetch calendar data'));
     } finally {
       setLoading(false);
     }
+  }, [workspaceId, userId]);
+
+  // Hydrate from disk cache as soon as we have the workspace/user identity so
+  // the calendar grid can render its previous snapshot instantly. Network
+  // refresh kicks in right after via the fetch effect below.
+  useEffect(() => {
+    if (!workspaceId || !userId) return;
+    let cancelled = false;
+    const cacheId = `${workspaceId}:${userId}`;
+    (async () => {
+      const cached = await readCache(workspaceId, userId);
+      if (cancelled) return;
+      if (!cached) return;
+      // Only apply cache if we haven't already loaded fresher data for this id.
+      if (hydratedRef.current === cacheId) return;
+      hydratedRef.current = cacheId;
+      setTodos(cached.todos || []);
+      setScheduledTasks(cached.scheduledTasks || []);
+      setCalendarEvents(cached.calendarEvents || []);
+      setBlockedTimes(cached.blockedTimes || []);
+      setDeadlines(cached.deadlines || []);
+      // Clear loading immediately - we have something to show.
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [workspaceId, userId]);
 
   // Fetch data on mount and when dependencies change

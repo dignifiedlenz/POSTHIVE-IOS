@@ -1,379 +1,187 @@
-import React, {useState, useEffect, useCallback, useRef} from 'react';
+import React, {useState} from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   TouchableOpacity,
-  Image,
-  RefreshControl,
-  ActivityIndicator,
   Dimensions,
   Animated,
+  PanResponder,
 } from 'react-native';
 import {useNavigation, useRoute, RouteProp} from '@react-navigation/native';
 import {StackNavigationProp} from '@react-navigation/stack';
-import {ChevronLeft, Film, MessageCircle, Folder} from 'lucide-react-native';
+import {TabView, type Route} from 'react-native-tab-view';
+import {ChevronLeft} from 'lucide-react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {theme} from '../../theme';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
-import {getProjectDeliverables, getProjectSeries} from '../../lib/api';
-import {Deliverable, Series} from '../../lib/types';
-import {ReviewStackParamList} from '../../app/App';
+import {ProjectsStackParamList} from '../../app/App';
+import {ProjectProvider} from '../../contexts/ProjectContext';
+import {ProjectDeliverablesTab} from './ProjectDeliverablesTab';
+import {ProjectResourcesTab} from './ProjectResourcesTab';
+import {ProjectLinksTodosTab} from './ProjectLinksTodosTab';
 
-type RouteParams = RouteProp<ReviewStackParamList, 'ProjectDeliverables'>;
-type NavigationProp = StackNavigationProp<ReviewStackParamList>;
+type RouteParams = RouteProp<ProjectsStackParamList, 'ProjectDeliverables'>;
+type NavigationProp = StackNavigationProp<ProjectsStackParamList>;
 
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
-const HERO_HEIGHT = SCREEN_HEIGHT * 0.5;
-const CARD_HEIGHT = 200;
+const HERO_HEIGHT = SCREEN_HEIGHT * 0.22;
 
-interface DeliverableCardProps {
-  deliverable: Deliverable;
-  onPress: () => void;
+const PROJECT_TAB_ROUTES: Route[] = [
+  {key: 'deliverables', title: 'Deliverables'},
+  {key: 'resources', title: 'Resources'},
+  {key: 'linksTodos', title: 'Links & Todos'},
+];
+
+function ProjectTabBar({
+  navigationState,
+  jumpTo,
+}: {
+  navigationState: {index: number; routes: Route[]};
+  jumpTo: (key: string) => void;
+}) {
+  return (
+    <View style={projectStyles.tabBar}>
+      {navigationState.routes.map((route, i) => (
+        <TouchableOpacity
+          key={route.key}
+          style={[
+            projectStyles.tabItem,
+            navigationState.index === i && projectStyles.tabItemActive,
+          ]}
+          onPress={() => jumpTo(route.key)}>
+          <Text
+            style={[
+              projectStyles.tabLabel,
+              navigationState.index === i && projectStyles.tabLabelActive,
+            ]}>
+            {route.title}
+          </Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
 }
 
-function VerticalDeliverableCard({deliverable, onPress}: DeliverableCardProps) {
-  const hasUnreadComments =
-    deliverable.unread_comment_count != null && deliverable.unread_comment_count > 0;
+const EDGE_SWIPE_WIDTH = 28;
+const SWIPE_BACK_THRESHOLD = 60;
 
-  return (
-    <TouchableOpacity
-      style={styles.card}
-      onPress={onPress}
-      activeOpacity={0.9}>
-      {/* Thumbnail */}
-      {deliverable.thumbnail_url ? (
-        <Image
-          source={{uri: deliverable.thumbnail_url}}
-          style={styles.cardThumbnail}
-          resizeMode="cover"
-        />
-      ) : (
-        <View style={styles.cardPlaceholder}>
-          <Film size={48} color={theme.colors.textMuted} />
-        </View>
-      )}
-      
-      {/* Bottom gradient overlay */}
-      <LinearGradient
-        colors={['transparent', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.85)']}
-        locations={[0, 0.4, 1]}
-        style={styles.cardGradient}
-      />
-      
-      {/* Version badge - top left */}
-      {deliverable.current_version != null && (
-        <Text style={styles.cardVersionText}>
-          {deliverable.current_version === 100 ? 'Final' : `V${deliverable.current_version}`}
-        </Text>
-      )}
-      
-      {/* Unread comments badge - top right */}
-      {hasUnreadComments && (
-        <View style={styles.cardUnreadBadge}>
-          <MessageCircle size={12} color={theme.colors.textInverse} />
-          <Text style={styles.cardUnreadCount}>{deliverable.unread_comment_count}</Text>
-        </View>
-      )}
-      
-      {/* Title - bottom (version/final already shown top-left) */}
-      <View style={styles.cardContent}>
-        <Text style={styles.cardName} numberOfLines={1}>
-          {deliverable.name}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  );
+function getPageX(evt: {nativeEvent: {pageX?: number; locationX?: number; touches?: {pageX?: number}[]}}): number {
+  const n = evt.nativeEvent;
+  return n.pageX ?? n.touches?.[0]?.pageX ?? n.locationX ?? 0;
 }
 
 export function ProjectDeliverablesScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteParams>();
   const {projectId, projectName, clientName, thumbnailUrl} = route.params;
-  
-  const [deliverables, setDeliverables] = useState<Deliverable[]>([]);
-  const [series, setSeries] = useState<Series[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [index, setIndex] = useState(0);
 
-  // Scroll animation for blur effect
-  const scrollY = useRef(new Animated.Value(0)).current;
-
-  const loadData = useCallback(async () => {
-    try {
-      const [deliverablesData, seriesData] = await Promise.all([
-        getProjectDeliverables(projectId),
-        getProjectSeries(projectId),
-      ]);
-      setDeliverables(deliverablesData);
-      setSeries(seriesData);
-    } catch (err) {
-      console.error('Error loading project data:', err);
-    }
-  }, [projectId]);
-
-  useEffect(() => {
-    const init = async () => {
-      setIsLoading(true);
-      await loadData();
-      setIsLoading(false);
-    };
-    init();
-  }, [loadData]);
-
-  const handleRefresh = useCallback(async () => {
-    setIsRefreshing(true);
-    await loadData();
-    setIsRefreshing(false);
-  }, [loadData]);
-
-  const handleDeliverablePress = (deliverable: Deliverable) => {
-    navigation.navigate('DeliverableReview', {deliverableId: deliverable.id});
-  };
-
-  const handleSeriesPress = (s: Series) => {
-    navigation.navigate('SeriesItems', {
-      seriesId: s.id,
-      seriesName: s.name,
-      seriesDescription: s.description,
-      thumbnailUrl: s.thumbnail,
-      itemCount: s.item_count,
-    });
-  };
-
-  // Animated values for parallax and blur effect
-  const imageScale = scrollY.interpolate({
-    inputRange: [-100, 0, HERO_HEIGHT],
-    outputRange: [1.2, 1, 1.5],
-    extrapolate: 'clamp',
-  });
-
-  const imageTranslateY = scrollY.interpolate({
-    inputRange: [0, HERO_HEIGHT],
-    outputRange: [0, -HERO_HEIGHT * 0.3],
-    extrapolate: 'clamp',
-  });
-
-  const blurOverlayOpacity = scrollY.interpolate({
-    inputRange: [0, HERO_HEIGHT * 0.3, HERO_HEIGHT * 0.6],
-    outputRange: [0, 0.5, 1],
-    extrapolate: 'clamp',
-  });
-
-  const titleOpacity = scrollY.interpolate({
-    inputRange: [0, HERO_HEIGHT * 0.4],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
-
-  const titleTranslateY = scrollY.interpolate({
-    inputRange: [0, HERO_HEIGHT * 0.4],
-    outputRange: [0, -50],
-    extrapolate: 'clamp',
-  });
-
-  const renderEmptyState = () => (
-    <View style={styles.emptyState}>
-      <Film size={40} color={theme.colors.textMuted} />
-      <Text style={styles.emptyTitle}>NO DELIVERABLES</Text>
-      <Text style={styles.emptySubtitle}>
-        Deliverables for this project will appear here
-      </Text>
-    </View>
+  const panResponder = React.useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: (evt) => getPageX(evt) < EDGE_SWIPE_WIDTH,
+        onPanResponderRelease: (_evt, gestureState) => {
+          if (gestureState.dx > SWIPE_BACK_THRESHOLD) {
+            navigation.goBack();
+          }
+        },
+      }),
+    [navigation],
   );
 
-  if (isLoading) {
-    return <BrandedLoadingScreen message="Loading deliverables..." />;
-  }
+  const renderScene = ({route: {key}}: {route: Route}) => {
+    switch (key) {
+      case 'deliverables':
+        return <ProjectDeliverablesTab />;
+      case 'resources':
+        return <ProjectResourcesTab />;
+      case 'linksTodos':
+        return <ProjectLinksTodosTab />;
+      default:
+        return null;
+    }
+  };
 
   return (
-    <View style={styles.container}>
-      {/* Fixed hero background with parallax */}
-      <View style={styles.heroSection}>
-        {thumbnailUrl ? (
-          <>
-            {/* Main image with parallax */}
-            <Animated.Image
-              source={{uri: thumbnailUrl}}
-              style={[
-                styles.heroImage,
-                {
-                  transform: [
-                    {scale: imageScale},
-                    {translateY: imageTranslateY},
-                  ],
-                },
-              ]}
-              resizeMode="cover"
-              blurRadius={0}
-            />
-            {/* Blur overlay that increases on scroll */}
-            <Animated.View
-              style={[
-                styles.blurOverlay,
-                {opacity: blurOverlayOpacity},
-              ]}>
+    <ProjectProvider
+      params={{
+        projectId,
+        projectName,
+        clientName,
+        thumbnailUrl,
+      }}>
+      <View style={projectStyles.container}>
+        <View style={projectStyles.heroSection}>
+          {thumbnailUrl ? (
+            <>
               <Animated.Image
                 source={{uri: thumbnailUrl}}
-                style={[
-                  styles.heroImage,
-                  {
-                    transform: [
-                      {scale: imageScale},
-                      {translateY: imageTranslateY},
-                    ],
-                  },
-                ]}
+                style={projectStyles.heroImage}
                 resizeMode="cover"
-                blurRadius={20}
               />
-            </Animated.View>
-          </>
-        ) : (
-          <View style={styles.heroNoImage}>
-            <Folder size={64} color={theme.colors.textMuted} />
+            </>
+          ) : (
+            <View style={projectStyles.heroNoImage} />
+          )}
+          <LinearGradient
+            colors={[
+              'rgba(0,0,0,0.2)',
+              'rgba(0,0,0,0.5)',
+              'rgba(0,0,0,0.85)',
+              theme.colors.background,
+            ]}
+            locations={[0, 0.35, 0.65, 1]}
+            style={projectStyles.heroGradient}
+          />
+          <View style={projectStyles.heroContent}>
+            <Text style={projectStyles.projectTitle} numberOfLines={2}>
+              {projectName}
+            </Text>
+            {clientName && (
+              <Text style={projectStyles.clientName}>{clientName.toUpperCase()}</Text>
+            )}
+            <View style={projectStyles.decorativeLine} />
           </View>
-        )}
-        
-        {/* Gradient overlay */}
-        <LinearGradient
-          colors={['transparent', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.7)', theme.colors.background]}
-          locations={[0, 0.4, 0.7, 1]}
-          style={styles.heroGradient}
+        </View>
+
+        <View style={projectStyles.floatingHeader} pointerEvents="box-none">
+          <TouchableOpacity
+            style={projectStyles.backButton}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}>
+            <ChevronLeft size={20} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Left-edge swipe to go back - captures gesture before TabView */}
+        <View
+          style={projectStyles.edgeSwipeZone}
+          {...panResponder.panHandlers}
+          pointerEvents="auto"
         />
 
-        {/* Animated title */}
-        <Animated.View
-          style={[
-            styles.heroContent,
-            {
-              opacity: titleOpacity,
-              transform: [{translateY: titleTranslateY}],
-            },
-          ]}>
-          <Text style={styles.projectTitle} numberOfLines={2}>{projectName}</Text>
-          {clientName && (
-            <Text style={styles.clientName}>{clientName.toUpperCase()}</Text>
-          )}
-          <View style={styles.decorativeLine} />
-        </Animated.View>
-
-      </View>
-
-      {/* Back button - outside heroSection to ensure it's clickable */}
-      <View style={styles.floatingHeader} pointerEvents="box-none">
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-          activeOpacity={0.7}>
-          <ChevronLeft size={20} color={theme.colors.textPrimary} />
-        </TouchableOpacity>
-      </View>
-
-      {/* Scrollable content */}
-      <Animated.ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        onScroll={Animated.event(
-          [{nativeEvent: {contentOffset: {y: scrollY}}}],
-          {useNativeDriver: true}
-        )}
-        scrollEventThrottle={16}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={handleRefresh}
-            tintColor={theme.colors.textPrimary}
+        <View style={projectStyles.tabViewContainer}>
+          <TabView
+            navigationState={{index, routes: PROJECT_TAB_ROUTES}}
+            renderScene={renderScene}
+            onIndexChange={setIndex}
+            initialLayout={{width: SCREEN_WIDTH}}
+            renderTabBar={(props) => <ProjectTabBar {...props} />}
+            swipeEnabled={true}
+            lazy={false}
           />
-        }>
-        {/* Spacer for hero */}
-        <View style={styles.heroSpacer} />
-
-        {/* Series section */}
-        {series.length > 0 && (
-          <View style={styles.seriesSection}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionLabel}>SERIES</Text>
-              <Text style={styles.deliverableCount}>{series.length}</Text>
-            </View>
-            <View style={styles.seriesList}>
-              {series.map((s) => (
-                <TouchableOpacity
-                  key={s.id}
-                  style={styles.seriesCard}
-                  onPress={() => handleSeriesPress(s)}
-                  activeOpacity={0.85}>
-                  {s.thumbnail ? (
-                    <Image
-                      source={{uri: s.thumbnail}}
-                      style={styles.seriesCardImage}
-                      resizeMode="cover"
-                    />
-                  ) : (
-                    <View style={styles.seriesCardPlaceholder}>
-                      <Film size={28} color="rgba(255,255,255,0.15)" />
-                    </View>
-                  )}
-                  <LinearGradient
-                    colors={['rgba(0,0,0,0.8)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.2)', 'transparent']}
-                    start={{x: 0, y: 0.5}}
-                    end={{x: 1, y: 0.5}}
-                    style={styles.seriesCardGradient}
-                  />
-                  <View style={styles.seriesCardContent}>
-                    <Text style={styles.seriesCardName} numberOfLines={1}>
-                      {s.name}
-                    </Text>
-                    <Text style={styles.seriesCardCount}>
-                      {s.item_count} {s.item_count === 1 ? 'ITEM' : 'ITEMS'}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* Deliverables section */}
-        <View style={styles.deliverablesSection}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionLabel}>DELIVERABLES</Text>
-            <Text style={styles.deliverableCount}>{deliverables.length}</Text>
-          </View>
-
-          {deliverables.length > 0 ? (
-            <View style={styles.cardList}>
-              {deliverables.map((item) => (
-                <VerticalDeliverableCard
-                  key={item.id}
-                  deliverable={item}
-                  onPress={() => handleDeliverablePress(item)}
-                />
-              ))}
-            </View>
-          ) : (
-            renderEmptyState()
-          )}
         </View>
-      </Animated.ScrollView>
-    </View>
+      </View>
+    </ProjectProvider>
   );
 }
 
-const styles = StyleSheet.create({
+const projectStyles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
   },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-  },
-  // Hero section - fixed at top
   heroSection: {
     position: 'absolute',
     top: 0,
@@ -387,32 +195,35 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  blurOverlay: {
-    ...StyleSheet.absoluteFillObject,
-  },
   heroNoImage: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: theme.colors.surfaceElevated,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   heroGradient: {
     ...StyleSheet.absoluteFillObject,
   },
   heroContent: {
     position: 'absolute',
-    bottom: theme.spacing.xl,
+    bottom: theme.spacing.lg + 8,
     left: 0,
     right: 0,
     alignItems: 'center',
-    paddingHorizontal: theme.spacing.xl,
+    paddingHorizontal: theme.spacing.lg,
   },
   floatingHeader: {
     position: 'absolute',
-    top: 60,
+    top: 44,
     left: theme.spacing.md,
     zIndex: 1000,
-    elevation: 10, // Android
+    elevation: 10,
+  },
+  edgeSwipeZone: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: EDGE_SWIPE_WIDTH,
+    zIndex: 20,
   },
   backButton: {
     width: 44,
@@ -423,209 +234,57 @@ const styles = StyleSheet.create({
   },
   projectTitle: {
     color: theme.colors.textPrimary,
-    fontSize: 34,
+    fontSize: 22,
     fontFamily: theme.typography.fontFamily.bold,
     textAlign: 'center',
-    lineHeight: 40,
+    lineHeight: 26,
     textShadowColor: 'rgba(0,0,0,0.9)',
     textShadowOffset: {width: 0, height: 2},
     textShadowRadius: 10,
   },
   clientName: {
     color: 'rgba(255,255,255,0.8)',
-    fontSize: 12,
+    fontSize: 10,
     fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 3,
-    marginTop: theme.spacing.sm,
+    letterSpacing: 2,
+    marginTop: theme.spacing.xs,
     textShadowColor: 'rgba(0,0,0,0.9)',
     textShadowOffset: {width: 0, height: 1},
     textShadowRadius: 6,
   },
   decorativeLine: {
-    width: 50,
-    height: 2,
+    width: 30,
+    height: 1,
     backgroundColor: theme.colors.textPrimary,
-    marginTop: theme.spacing.lg,
-  },
-  // Spacer to push content below hero
-  heroSpacer: {
-    height: HERO_HEIGHT - 40,
-  },
-  // Series section
-  seriesSection: {
-    backgroundColor: theme.colors.background,
-    paddingTop: theme.spacing.lg,
-    paddingBottom: theme.spacing.md,
-  },
-  seriesList: {
-    paddingHorizontal: theme.spacing.md,
-    gap: theme.spacing.sm,
-  },
-  seriesCard: {
-    width: '100%',
-    height: 72,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    position: 'relative',
-  },
-  seriesCardImage: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  seriesCardPlaceholder: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: theme.colors.surfaceElevated,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  seriesCardGradient: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  seriesCardContent: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    paddingHorizontal: theme.spacing.md,
-  },
-  seriesCardName: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontFamily: theme.typography.fontFamily.semibold,
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: {width: 0, height: 1},
-    textShadowRadius: 3,
-  },
-  seriesCardCount: {
-    color: 'rgba(255, 255, 255, 0.5)',
-    fontSize: 10,
-    fontFamily: theme.typography.fontFamily.medium,
-    letterSpacing: 1.5,
-    marginTop: 4,
-  },
-  // Deliverables section
-  deliverablesSection: {
-    backgroundColor: theme.colors.background,
-    paddingTop: theme.spacing.lg,
-    paddingBottom: 100,
-    minHeight: SCREEN_HEIGHT * 0.6,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.md,
-    marginBottom: theme.spacing.md,
-  },
-  sectionLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 1.5,
-  },
-  deliverableCount: {
-    color: theme.colors.textDisabled,
-    fontSize: 11,
-  },
-  // Vertical card list
-  cardList: {
-    paddingHorizontal: theme.spacing.md,
-    gap: theme.spacing.md,
-  },
-  // Card styles
-  card: {
-    width: '100%',
-    height: CARD_HEIGHT,
-    position: 'relative',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    overflow: 'hidden',
-  },
-  cardThumbnail: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: theme.colors.surface,
-  },
-  cardPlaceholder: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: theme.colors.surfaceElevated,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardGradient: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: '60%',
-  },
-  cardVersionText: {
-    position: 'absolute',
-    top: theme.spacing.md,
-    left: theme.spacing.md,
-    color: 'rgba(255, 255, 255, 0.8)',
-    fontSize: 13,
-    fontFamily: theme.typography.fontFamily.medium,
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: {width: 0, height: 1},
-    textShadowRadius: 3,
-  },
-  cardUnreadBadge: {
-    position: 'absolute',
-    top: theme.spacing.md,
-    right: theme.spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: theme.colors.textPrimary,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    gap: 4,
-  },
-  cardUnreadCount: {
-    color: theme.colors.textInverse,
-    fontSize: 11,
-    fontFamily: theme.typography.fontFamily.bold,
-  },
-  cardContent: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: theme.spacing.md,
-    paddingBottom: theme.spacing.md,
-  },
-  cardName: {
-    color: theme.colors.textPrimary,
-    fontSize: 18,
-    fontFamily: theme.typography.fontFamily.semibold,
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: {width: 0, height: 1},
-    textShadowRadius: 3,
-  },
-  // Loading & Empty states
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: theme.spacing.xxl,
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: theme.spacing.xxl,
-    marginHorizontal: theme.spacing.md,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: theme.colors.borderHover,
-  },
-  emptyTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: 11,
-    fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 2,
-    marginTop: theme.spacing.md,
-  },
-  emptySubtitle: {
-    color: theme.colors.textMuted,
-    fontSize: 12,
-    textAlign: 'center',
     marginTop: theme.spacing.sm,
+  },
+  tabViewContainer: {
+    flex: 1,
+    marginTop: HERO_HEIGHT - 24,
+  },
+  tabBar: {
+    flexDirection: 'row',
+    backgroundColor: theme.colors.background,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  tabItem: {
+    flex: 1,
+    paddingVertical: theme.spacing.md,
+    alignItems: 'center',
+  },
+  tabItemActive: {
+    borderBottomWidth: 2,
+    borderBottomColor: theme.colors.textPrimary,
+  },
+  tabLabel: {
+    fontSize: 12,
+    fontFamily: theme.typography.fontFamily.medium,
+    color: theme.colors.textMuted,
+    letterSpacing: 1,
+  },
+  tabLabelActive: {
+    color: theme.colors.textPrimary,
+    fontFamily: theme.typography.fontFamily.bold,
   },
 });

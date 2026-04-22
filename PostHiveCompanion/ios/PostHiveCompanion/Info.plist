@@ -26,12 +26,12 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
 	</dict>
 	<key>NSFaceIDUsageDescription</key>
 	<string>PostHive uses Face ID to securely authenticate and sign you in.</string>
@@ -60,13 +60,29 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
+	<key>UIRequiresFullScreen</key>
+	<true/>
+	<key>UIAppFonts</key>
 	<array>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-		<string>UIInterfaceOrientationPortrait</string>
+		<string>BBHSansHegarty-Regular.ttf</string>
+		<string>Montserrat-VariableFont_wght.ttf</string>
+		<string>Montserrat-Italic-VariableFont_wght.ttf</string>
+		<string>MillerBanner-LightItalic.otf</string>
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>PostHive App</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>posthive</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

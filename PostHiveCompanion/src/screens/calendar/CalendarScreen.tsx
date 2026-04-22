@@ -59,17 +59,6 @@ import {
   eachDayOfInterval,
   isValid,
 } from 'date-fns';
-
-// Safe format function that handles invalid dates
-function safeFormat(date: Date | number, formatStr: string, fallback: string = ''): string {
-  try {
-    const d = typeof date === 'number' ? new Date(date) : date;
-    if (!isValid(d)) return fallback;
-    return format(d, formatStr);
-  } catch {
-    return fallback;
-  }
-}
 import {theme} from '../../theme';
 import {useAuth} from '../../hooks/useAuth';
 import {capitalizeFirst} from '../../lib/utils';
@@ -82,6 +71,7 @@ import {
   separateEventsByType,
   splitTodosByStatus,
   calculateTimePosition,
+  formatDateKey,
   PX_PER_HOUR,
   BLOCKED_TIME_COLORS,
   ScheduledTask,
@@ -92,8 +82,71 @@ import {Todo, CalendarEvent} from '../../lib/types';
 import {updateTodoStatus, createEvent} from '../../lib/api';
 import {supabase} from '../../lib/supabase';
 import {FocusModeModal} from '../../components/FocusModeModal';
+import * as Haptics from 'expo-haptics';
 
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
+
+// Lightweight tap feedback for calendar day cells.
+// On iOS this triggers a subtle selection-change haptic.
+function triggerCalendarTapHaptic() {
+  if (Platform.OS !== 'ios') return;
+  try {
+    Haptics.selectionAsync();
+  } catch {
+    // ignore - haptics are best-effort
+  }
+}
+
+// Safe format function that handles invalid dates
+function safeFormat(date: Date | number, formatStr: string, fallback: string = ''): string {
+  try {
+    const d = typeof date === 'number' ? new Date(date) : date;
+    if (!isValid(d)) return fallback;
+    return format(d, formatStr);
+  } catch {
+    return fallback;
+  }
+}
+
+const WEEK_STARTS_ON = 0 as const;
+
+function getCalendarDaysForMonth(viewDate: Date): Date[] {
+  try {
+    if (!isValid(viewDate)) {
+      return [];
+    }
+    const monthStart = startOfMonth(viewDate);
+    const monthEnd = endOfMonth(viewDate);
+    const calendarStart = startOfWeek(monthStart, {weekStartsOn: WEEK_STARTS_ON});
+    const calendarEnd = endOfWeek(monthEnd, {weekStartsOn: WEEK_STARTS_ON});
+    return eachDayOfInterval({start: calendarStart, end: calendarEnd});
+  } catch {
+    return [];
+  }
+}
+
+const CAL_MONTH_PAD_H = theme.spacing.md;
+const CAL_CELL_GAP = 0;
+const CAL_CELL_W =
+  (SCREEN_WIDTH - CAL_MONTH_PAD_H * 2 - CAL_CELL_GAP * 14) / 7;
+const CAL_MONTH_TITLE_BLOCK = 34;
+const CAL_MONTH_SECTION_BOTTOM_PAD = 0;
+
+function estimateMonthSectionHeight(monthStart: Date): number {
+  const n = getCalendarDaysForMonth(monthStart).length;
+  const rows = n / 7;
+  const rowH = Math.max(48, CAL_CELL_W * 1.15);
+  return (
+    CAL_MONTH_TITLE_BLOCK +
+    rows * rowH +
+    CAL_MONTH_SECTION_BOTTOM_PAD
+  );
+}
+
+const MONTH_SCROLL_RANGE_PAST = 24;
+const MONTH_SCROLL_RANGE_FUTURE = 24;
+
+const WEEKDAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const HOUR_LABEL_WIDTH = 50;
 const TIMELINE_WIDTH = SCREEN_WIDTH - HOUR_LABEL_WIDTH - 32;
 const SWIPE_THRESHOLD = 50;
@@ -108,44 +161,17 @@ export function CalendarScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'schedule' | 'tasks'>('schedule');
-  const [showFocusMode, setShowFocusMode] = useState(false);
   const [scrollY, setScrollY] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(SCREEN_HEIGHT - 300);
-  const pendingScrollToTime = useRef<string | null>(null);
-  const hasScrolledToCurrentTime = useRef(false);
+  const [showDayDetail, setShowDayDetail] = useState(false);
+  const [dayDetailDate, setDayDetailDate] = useState<Date | null>(null);
+  const hasInitialMonthScroll = useRef(false);
 
   // Refs
   const scrollViewRef = useRef<ScrollView>(null);
 
-  // Handle scroll to time when viewport height is available
-  const performScrollToTime = useCallback((timeString: string) => {
-    if (!scrollViewRef.current || viewportHeight <= 0) return;
-    
-    const [hours, minutes] = timeString.split(':').map(Number);
-    if (isNaN(hours) || isNaN(minutes)) return;
-    
-    // Calculate scroll position using PX_PER_HOUR constant (matches how calendar renders)
-    // Hour position: (hour - START_HOUR) * PX_PER_HOUR
-    const hourPosition = (hours - START_HOUR) * PX_PER_HOUR;
-    // Minutes offset: (minutes / 60) * PX_PER_HOUR
-    const minutesOffset = (minutes / 60) * PX_PER_HOUR;
-    // Event position in the timeline
-    const eventPosition = hourPosition + minutesOffset;
-    // Center the event vertically: scroll so event is at middle of viewport
-    const scrollPosition = eventPosition - (viewportHeight / 2);
-    
-    setTimeout(() => {
-      scrollViewRef.current?.scrollTo({
-        y: Math.max(0, scrollPosition),
-        animated: true,
-      });
-    }, 100);
-  }, [viewportHeight]);
-
-  // Handle navigation params to set date and scroll to time
+  // Handle navigation params to focus a specific date
   useFocusEffect(
     useCallback(() => {
       const params = route.params as {date?: string; scrollToTime?: string} | undefined;
@@ -153,39 +179,15 @@ export function CalendarScreen() {
         const date = new Date(params.date);
         if (!isNaN(date.getTime())) {
           setSelectedDate(date);
+          hasInitialMonthScroll.current = false;
         }
       }
-      if (params?.scrollToTime) {
-        // Store the scrollToTime to perform after layout completes
-        pendingScrollToTime.current = params.scrollToTime;
-        // Clear params immediately
-        navigation.setParams({date: undefined, scrollToTime: undefined});
-      } else if (params?.date) {
-        // Clear date param if no scrollToTime
-        navigation.setParams({date: undefined});
-      } else if (!hasScrolledToCurrentTime.current) {
-        // No params and haven't done initial scroll - scroll to current time if viewing today
-        const now = new Date();
-        if (isToday(selectedDate)) {
-          const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-          pendingScrollToTime.current = currentTime;
-          hasScrolledToCurrentTime.current = true;
-        }
+      if (params?.date || params?.scrollToTime) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (navigation as any).setParams({date: undefined, scrollToTime: undefined});
       }
-    }, [route.params, navigation, selectedDate])
+    }, [route.params, navigation])
   );
-
-  // Perform scroll when viewport height is available and we have a pending scroll
-  useEffect(() => {
-    if (pendingScrollToTime.current && viewportHeight > 0) {
-      performScrollToTime(pendingScrollToTime.current);
-      pendingScrollToTime.current = null;
-    }
-  }, [viewportHeight, performScrollToTime]);
-
-  // Swipe animation
-  const panX = useRef(new Animated.Value(0)).current;
-  const swipeDirection = useRef<'left' | 'right' | null>(null);
 
   const {
     todos,
@@ -200,256 +202,90 @@ export function CalendarScreen() {
     userId: user?.id || '',
   });
 
+  const monthScrollStarts = useMemo(() => {
+    const anchor = startOfMonth(new Date());
+    const months: Date[] = [];
+    for (let i = -MONTH_SCROLL_RANGE_PAST; i <= MONTH_SCROLL_RANGE_FUTURE; i++) {
+      months.push(addMonths(anchor, i));
+    }
+    return months;
+  }, []);
+
+  // Compute scroll Y offset for the selected month
+  const initialScrollY = useMemo(() => {
+    const anchorMonth = startOfMonth(selectedDate);
+    const idx = monthScrollStarts.findIndex(d => isSameMonth(d, anchorMonth));
+    if (idx < 0) return 0;
+    let y = 0;
+    for (let i = 0; i < idx; i++) {
+      y += estimateMonthSectionHeight(monthScrollStarts[i]);
+    }
+    return Math.max(0, y);
+  }, [monthScrollStarts, selectedDate]);
+
+  // Scroll to current month when content has been measured (most reliable)
+  const handleContentSizeChange = useCallback(
+    (_w: number, h: number) => {
+      if (hasInitialMonthScroll.current) return;
+      if (h <= 0) return;
+      scrollViewRef.current?.scrollTo({
+        y: initialScrollY,
+        animated: false,
+      });
+      hasInitialMonthScroll.current = true;
+    },
+    [initialScrollY],
+  );
+
+  // Build per-day maps for fast cell lookup
+  const eventsByDayKey = useMemo(() => {
+    const map = new Map<string, CalendarEvent[]>();
+    calendarEvents.forEach(ev => {
+      try {
+        const startDateStr = ev.start_time.split('T')[0];
+        if (ev.is_all_day) {
+          const endDateStr = ev.end_time.split('T')[0];
+          let cursor = new Date(`${startDateStr}T00:00:00`);
+          const last = new Date(`${endDateStr}T00:00:00`);
+          while (cursor < last) {
+            const key = formatDateKey(cursor);
+            if (!map.has(key)) map.set(key, []);
+            map.get(key)!.push(ev);
+            cursor.setDate(cursor.getDate() + 1);
+          }
+        } else {
+          const start = new Date(ev.start_time);
+          const end = new Date(ev.end_time);
+          const cursor = new Date(start);
+          cursor.setHours(0, 0, 0, 0);
+          const lastDay = new Date(end);
+          lastDay.setHours(0, 0, 0, 0);
+          while (cursor.getTime() <= lastDay.getTime()) {
+            const key = formatDateKey(cursor);
+            if (!map.has(key)) map.set(key, []);
+            map.get(key)!.push(ev);
+            cursor.setDate(cursor.getDate() + 1);
+          }
+        }
+      } catch {}
+    });
+    return map;
+  }, [calendarEvents]);
+
+  const deadlinesByDayKey = useMemo(() => {
+    const map = new Map<string, Deadline[]>();
+    deadlines.forEach(dl => {
+      if (!dl.due_date) return;
+      const key = dl.due_date;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(dl);
+    });
+    return map;
+  }, [deadlines]);
+
   // State for event editing
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [showEventDetail, setShowEventDetail] = useState(false);
-
-  // Filter data for selected date
-  const todosForDay = useMemo(
-    () => filterTodosForDate(todos, selectedDate),
-    [todos, selectedDate],
-  );
-
-  const scheduledTasksForDay = useMemo(
-    () => filterScheduledTasksForDate(scheduledTasks, selectedDate),
-    [scheduledTasks, selectedDate],
-  );
-
-  const blockedTimesForDay = useMemo(
-    () => filterBlockedTimesForDate(blockedTimes, selectedDate),
-    [blockedTimes, selectedDate],
-  );
-
-  const deadlinesForDay = useMemo(
-    () => filterDeadlinesForDate(deadlines, selectedDate),
-    [deadlines, selectedDate],
-  );
-
-  // Separate deadlines into all-day (no time or end-of-day) and timed
-  const {allDayDeadlines, timedDeadlines} = useMemo(() => {
-    const allDay: Deadline[] = [];
-    const timed: Deadline[] = [];
-    
-    deadlinesForDay.forEach(deadline => {
-      // If no due_time, or time is 23:59, show as all-day deadline at top
-      if (!deadline.due_time || deadline.due_time.startsWith('23:')) {
-        allDay.push(deadline);
-      } else {
-        timed.push(deadline);
-      }
-    });
-    
-    return {allDayDeadlines: allDay, timedDeadlines: timed};
-  }, [deadlinesForDay]);
-
-  const {timedEvents, allDayEvents} = useMemo(
-    () => separateEventsByType(calendarEvents, selectedDate),
-    [calendarEvents, selectedDate],
-  );
-
-  // Calculate collision positions for overlapping events (split evenly)
-  const eventPositions = useMemo(() => {
-    const positions = new Map<string, {left: number; width: number}>();
-    
-    if (timedEvents.length === 0) return positions;
-    
-    // Sort events by start time, then by end time
-    const sortedEvents = [...timedEvents].sort((a, b) => {
-      const aStart = new Date(a.start_time).getTime();
-      const bStart = new Date(b.start_time).getTime();
-      if (aStart !== bStart) return aStart - bStart;
-      const aEnd = new Date(a.end_time).getTime();
-      const bEnd = new Date(b.end_time).getTime();
-      return aEnd - bEnd;
-    });
-
-    // Group overlapping events using a more robust algorithm
-    const groups: CalendarEvent[][] = [];
-    const eventToGroup = new Map<string, number>();
-    
-    for (let i = 0; i < sortedEvents.length; i++) {
-      const event = sortedEvents[i];
-      const eventStart = new Date(event.start_time).getTime();
-      const eventEnd = new Date(event.end_time).getTime();
-      
-      // Find all groups this event overlaps with
-      const overlappingGroupIndices = new Set<number>();
-      for (let j = 0; j < i; j++) {
-        const prevEvent = sortedEvents[j];
-        const prevStart = new Date(prevEvent.start_time).getTime();
-        const prevEnd = new Date(prevEvent.end_time).getTime();
-        
-        // Check if events overlap
-        if (!(eventEnd <= prevStart || eventStart >= prevEnd)) {
-          const prevGroupIndex = eventToGroup.get(prevEvent.id);
-          if (prevGroupIndex !== undefined) {
-            overlappingGroupIndices.add(prevGroupIndex);
-          }
-        }
-      }
-      
-      if (overlappingGroupIndices.size === 0) {
-        // No overlap - create new group
-        const newGroupIndex = groups.length;
-        groups.push([event]);
-        eventToGroup.set(event.id, newGroupIndex);
-      } else {
-        // Merge all overlapping groups into one
-        const groupIndices = Array.from(overlappingGroupIndices).sort((a, b) => b - a);
-        const targetGroupIndex = groupIndices[groupIndices.length - 1];
-        const targetGroup = groups[targetGroupIndex];
-        
-        // Merge other groups into target group
-        for (let k = groupIndices.length - 2; k >= 0; k--) {
-          const mergeIndex = groupIndices[k];
-          const mergeGroup = groups[mergeIndex];
-          mergeGroup.forEach(e => {
-            targetGroup.push(e);
-            eventToGroup.set(e.id, targetGroupIndex);
-          });
-          groups.splice(mergeIndex, 1);
-          // Update indices for events in groups after the merged one
-          eventToGroup.forEach((groupIdx, eventId) => {
-            if (groupIdx > mergeIndex) {
-              eventToGroup.set(eventId, groupIdx - 1);
-            }
-          });
-        }
-        
-        // Add current event to target group
-        targetGroup.push(event);
-        eventToGroup.set(event.id, targetGroupIndex);
-      }
-    }
-
-    // Calculate positions for each group
-    const timelineStart = HOUR_LABEL_WIDTH + 4; // Reduced padding
-    const timelineEnd = SCREEN_WIDTH - 16;
-    const availableWidth = timelineEnd - timelineStart;
-
-    for (const group of groups) {
-      if (group.length === 1) {
-        // Single event - full width
-        positions.set(group[0].id, {
-          left: timelineStart,
-          width: availableWidth,
-        });
-      } else {
-        // Multiple overlapping events - split evenly (50/50 for 2, 33/33/33 for 3, etc.)
-        const eventWidth = availableWidth / group.length;
-        group.forEach((event, index) => {
-          positions.set(event.id, {
-            left: timelineStart + (index * eventWidth),
-            width: eventWidth,
-          });
-        });
-      }
-    }
-
-    return positions;
-  }, [timedEvents]);
-
-  // Calculate off-screen events for scroll indicators
-  const {eventsAbove, eventsBelow} = useMemo(() => {
-    const allItems = [
-      ...timedEvents.map(e => ({
-        title: e.title,
-        startHour: new Date(e.start_time).getHours() + new Date(e.start_time).getMinutes() / 60,
-      })),
-      ...scheduledTasksForDay.map(t => ({
-        title: t.title,
-        startHour: new Date(t.scheduled_start).getHours() + new Date(t.scheduled_start).getMinutes() / 60,
-      })),
-    ];
-
-    const visibleTopHour = scrollY / PX_PER_HOUR;
-    const visibleBottomHour = (scrollY + viewportHeight) / PX_PER_HOUR;
-
-    const above = allItems.filter(item => item.startHour < visibleTopHour);
-    const below = allItems.filter(item => item.startHour > visibleBottomHour);
-
-    return {eventsAbove: above.length, eventsBelow: below.length};
-  }, [timedEvents, scheduledTasksForDay, scrollY, viewportHeight]);
-
-  const {overdueTodos, pendingTodos, inProgressTodos, completedTodos} = useMemo(() => splitTodosByStatus(todos), [todos]);
-
-  // Handle tab switching with animation
-  const handleTabChange = useCallback((tab: 'schedule' | 'tasks') => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setActiveTab(tab);
-  }, []);
-
-  // Active task for Focus Mode - use first in-progress todo
-  const activeTask = useMemo(() => todos.find(t => t.status === 'in_progress') || null, [todos]);
-
-  // Pan responder for swipe gestures
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: (_, gestureState) => {
-          return Math.abs(gestureState.dx) > 10 && Math.abs(gestureState.dy) < 30;
-        },
-        onPanResponderGrant: () => {
-          swipeDirection.current = null;
-        },
-        onPanResponderMove: (_, gestureState) => {
-          if (Math.abs(gestureState.dx) > Math.abs(gestureState.dy)) {
-            panX.setValue(gestureState.dx);
-          }
-        },
-        onPanResponderRelease: (_, gestureState) => {
-          if (gestureState.dx > SWIPE_THRESHOLD) {
-            // Swipe right - go to previous day
-            Animated.timing(panX, {
-              toValue: SCREEN_WIDTH,
-              duration: 200,
-              useNativeDriver: true,
-            }).start(() => {
-              setSelectedDate(prev => subDays(prev, 1));
-              panX.setValue(0);
-            });
-          } else if (gestureState.dx < -SWIPE_THRESHOLD) {
-            // Swipe left - go to next day
-            Animated.timing(panX, {
-              toValue: -SCREEN_WIDTH,
-              duration: 200,
-              useNativeDriver: true,
-            }).start(() => {
-              setSelectedDate(prev => addDays(prev, 1));
-              panX.setValue(0);
-            });
-          } else {
-            // Snap back
-            Animated.spring(panX, {
-              toValue: 0,
-              useNativeDriver: true,
-              tension: 100,
-              friction: 10,
-            }).start();
-          }
-        },
-      }),
-    [panX],
-  );
-
-  // Navigation
-  const goToPreviousDay = useCallback(() => {
-    setSelectedDate(prev => subDays(prev, 1));
-  }, []);
-
-  const goToNextDay = useCallback(() => {
-    setSelectedDate(prev => addDays(prev, 1));
-  }, []);
-
-  const goToToday = useCallback(() => {
-    setSelectedDate(new Date());
-  }, []);
-
-  const handleSelectDate = useCallback((date: Date) => {
-    setSelectedDate(date);
-    setShowMonthPicker(false);
-  }, []);
 
   // Refresh handler
   const handleRefresh = useCallback(async () => {
@@ -458,491 +294,72 @@ export function CalendarScreen() {
     setIsRefreshing(false);
   }, [refresh]);
 
-  // Date display
-  const dateDisplay = useMemo(() => {
-    if (isToday(selectedDate)) {
-      return 'TODAY';
-    }
-    return safeFormat(selectedDate, 'EEE, MMM d', 'SELECT DATE').toUpperCase();
-  }, [selectedDate]);
-
-  // Check if there's any content for the day (schedule tab)
-  const hasScheduleContent =
-    scheduledTasksForDay.length > 0 ||
-    timedEvents.length > 0 ||
-    allDayEvents.length > 0 ||
-    blockedTimesForDay.length > 0;
-
-  // Check if there are any tasks
-  const hasTasksContent = 
-    pendingTodos.length > 0 || 
-    inProgressTodos.length > 0 ||
-    completedTodos.length > 0;
-
-  // Open tasks count for the tab badge (only show open, not completed)
-  const openTasksCount = pendingTodos.length + inProgressTodos.length;
-
-  // Find the next upcoming event or scheduled task
-  const nextUpcoming = useMemo(() => {
-    const now = new Date();
-    
-    // Collect all upcoming items
-    const upcomingItems: Array<{
-      type: 'event' | 'scheduled_task';
-      title: string;
-      startTime: Date;
-      endTime: Date;
-      color?: string;
-      location?: string | null;
-      meetingLink?: string | null;
-    }> = [];
-
-    // Add calendar events
-    calendarEvents.forEach(event => {
-      try {
-        const start = new Date(event.start_time);
-        const end = new Date(event.end_time);
-        if (isValid(start) && start > now) {
-          upcomingItems.push({
-            type: 'event',
-            title: event.title,
-            startTime: start,
-            endTime: end,
-            color: event.calendar_color || '#3b82f6',
-            location: event.location,
-            meetingLink: event.meeting_link,
-          });
-        }
-      } catch {}
-    });
-
-    // Add scheduled tasks
-    scheduledTasks.forEach(task => {
-      try {
-        const start = new Date(task.scheduled_start);
-        const end = new Date(task.scheduled_end);
-        if (isValid(start) && start > now && task.status !== 'completed') {
-          upcomingItems.push({
-            type: 'scheduled_task',
-            title: task.title,
-            startTime: start,
-            endTime: end,
-          });
-        }
-      } catch {}
-    });
-
-    // Sort by start time and return the first one
-    upcomingItems.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
-    return upcomingItems[0] || null;
-  }, [calendarEvents, scheduledTasks]);
-
-  // Handle navigation to next event
-  const handleNextEventPress = useCallback(() => {
-    if (!nextUpcoming) return;
-
-    // Switch to schedule tab
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setActiveTab('schedule');
-
-    // Navigate to the event's date
-    setSelectedDate(nextUpcoming.startTime);
-
-    // Calculate scroll position based on event start time
-    const eventHour = nextUpcoming.startTime.getHours() + nextUpcoming.startTime.getMinutes() / 60;
-    const scrollPosition = Math.max(0, (eventHour - START_HOUR - 1) * PX_PER_HOUR); // -1 hour offset to show context
-
-    // Delay scroll slightly to allow date change to render
-    setTimeout(() => {
-      scrollViewRef.current?.scrollTo({
-        y: scrollPosition,
-        animated: true,
-      });
-    }, 100);
-  }, [nextUpcoming]);
-
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <Text style={styles.sectionLabel}>CALENDAR</Text>
-          <View style={styles.headerActions}>
-            {!isToday(selectedDate) && (
-              <TouchableOpacity style={styles.todayButton} onPress={goToToday}>
-                <Text style={styles.todayButtonText}>TODAY</Text>
-              </TouchableOpacity>
-            )}
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      <View style={continuousCalendarStyles.stickyWeekRow}>
+        {WEEKDAY_LETTERS.map((letter, i) => (
+          <View key={`wkd-${i}`} style={continuousCalendarStyles.stickyWeekCell}>
+            <Text style={continuousCalendarStyles.stickyWeekLetter}>{letter}</Text>
           </View>
-        </View>
-
-        {/* Date Navigation */}
-        <View style={styles.dateNav}>
-          <TouchableOpacity
-            style={styles.navButton}
-            onPress={goToPreviousDay}
-            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-            <ChevronLeft size={20} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.dateDisplay}
-            onPress={() => setShowMonthPicker(true)}>
-            <CalendarIcon size={16} color={theme.colors.textMuted} />
-            <Text style={styles.dateText}>{dateDisplay}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.navButton}
-            onPress={goToNextDay}
-            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-            <ChevronRight size={20} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
-        </View>
+        ))}
       </View>
-
-      {/* Tab Bar */}
-      <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'schedule' && styles.tabActive]}
-          onPress={() => handleTabChange('schedule')}
-          activeOpacity={0.7}>
-          <CalendarIcon 
-            size={16} 
-            color={activeTab === 'schedule' ? theme.colors.accent : theme.colors.textMuted} 
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.scrollView}
+        contentContainerStyle={styles.calendarScrollContent}
+        showsVerticalScrollIndicator={false}
+        scrollEventThrottle={16}
+        contentOffset={{x: 0, y: initialScrollY}}
+        onContentSizeChange={handleContentSizeChange}
+        onScroll={e => setScrollY(e.nativeEvent.contentOffset.y)}
+        onLayout={e => setViewportHeight(e.nativeEvent.layout.height)}
+        stickyHeaderIndices={monthScrollStarts.map((_, i) => i * 2)}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            tintColor={theme.colors.textPrimary}
           />
-          <Text style={[styles.tabText, activeTab === 'schedule' && styles.tabTextActive]}>
-            SCHEDULE
-          </Text>
-          {(scheduledTasksForDay.length + timedEvents.length) > 0 && (
-            <View style={[styles.tabBadge, activeTab === 'schedule' && styles.tabBadgeActive]}>
-              <Text style={[styles.tabBadgeText, activeTab === 'schedule' && styles.tabBadgeTextActive]}>
-                {scheduledTasksForDay.length + timedEvents.length}
+        }>
+        {monthScrollStarts.flatMap(m => {
+          const monthKey = format(m, 'yyyy-MM');
+          return [
+            <View
+              key={`title-${monthKey}`}
+              style={continuousCalendarStyles.monthStickyTitle}>
+              <Text style={continuousCalendarStyles.monthSectionTitle}>
+                {safeFormat(m, 'MMMM yyyy', '')}
               </Text>
-            </View>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'tasks' && styles.tabActive]}
-          onPress={() => handleTabChange('tasks')}
-          activeOpacity={0.7}>
-          <ListChecks 
-            size={16} 
-            color={activeTab === 'tasks' ? theme.colors.accent : theme.colors.textMuted} 
-          />
-          <Text style={[styles.tabText, activeTab === 'tasks' && styles.tabTextActive]}>
-            TASKS
-          </Text>
-          {openTasksCount > 0 && (
-            <View style={[
-              styles.tabBadge, 
-              activeTab === 'tasks' && styles.tabBadgeActive,
-            ]}>
-              <Text style={[
-                styles.tabBadgeText, 
-                activeTab === 'tasks' && styles.tabBadgeTextActive,
-              ]}>
-                {openTasksCount}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
+            </View>,
+            <ContinuousCalendarMonthGrid
+              key={`grid-${monthKey}`}
+              monthAnchor={m}
+              selectedDate={selectedDate}
+              onSelectDay={day => {
+                setSelectedDate(day);
+                setDayDetailDate(day);
+                setShowDayDetail(true);
+              }}
+              eventsByDayKey={eventsByDayKey}
+              deadlinesByDayKey={deadlinesByDayKey}
+            />,
+          ];
+        })}
+        <View style={{height: 80}} />
+      </ScrollView>
 
-      {/* Swipeable content */}
-      <Animated.View
-        style={[styles.contentContainer, {transform: [{translateX: panX}]}]}
-        {...panResponder.panHandlers}>
-        <ScrollView
-          ref={scrollViewRef}
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollViewContent}
-          showsVerticalScrollIndicator={false}
-          scrollEventThrottle={16}
-          onScroll={(e) => setScrollY(e.nativeEvent.contentOffset.y)}
-          onLayout={(e) => {
-            const height = e.nativeEvent.layout.height;
-            setViewportHeight(height);
-          }}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefreshing}
-              onRefresh={handleRefresh}
-              tintColor={theme.colors.textPrimary}
-            />
-          }>
-          {/* Loading skeleton or content */}
-          {loading && !isRefreshing ? (
-            <TimelineSkeleton />
-          ) : (
-            <>
-              {/* SCHEDULE TAB CONTENT */}
-              {activeTab === 'schedule' && (
-                <>
-                  {/* All-day events & deadlines section */}
-                  {(allDayEvents.length > 0 || allDayDeadlines.length > 0) && (
-                    <View style={styles.allDaySection}>
-                      {allDayDeadlines.length > 0 && (
-                        <>
-                          <Text style={styles.allDayLabel}>DEADLINES</Text>
-                          {allDayDeadlines.map(deadline => (
-                            <AllDayDeadlineCard key={deadline.id} deadline={deadline} />
-                          ))}
-                        </>
-                      )}
-                      {allDayEvents.length > 0 && (
-                        <>
-                          <Text style={styles.allDayLabel}>ALL DAY</Text>
-                          {allDayEvents.map(event => (
-                            <AllDayEventCard key={event.id} event={event} />
-                          ))}
-                        </>
-                      )}
-                    </View>
-                  )}
-
-                  {/* Timeline */}
-                  <View style={styles.timelineContainer}>
-                    <Pressable
-                      style={styles.timeline}
-                      onLongPress={(e) => {
-                        // Calculate which hour was long-pressed
-                        // locationY is relative to the Pressable (timeline), which starts at 0
-                        // Hour markers are positioned absolutely at: (hour - START_HOUR) * PX_PER_HOUR
-                        // So hour 0 (START_HOUR) is at position 0, hour 1 is at PX_PER_HOUR, etc.
-                        // locationY directly tells us the position within the timeline content
-                        const locationY = e.nativeEvent.locationY;
-                        
-                        // Calculate which hour was pressed based on position
-                        // locationY / PX_PER_HOUR gives us the hour offset from START_HOUR
-                        const hourOffset = locationY / PX_PER_HOUR;
-                        const hour = Math.floor(hourOffset) + START_HOUR;
-                        const clampedHour = Math.max(START_HOUR, Math.min(END_HOUR - 1, hour));
-                        
-                        // Create new event at this hour in local time
-                        // Get the date components from selectedDate (which is in local time)
-                        const year = selectedDate.getFullYear();
-                        const month = selectedDate.getMonth();
-                        const day = selectedDate.getDate();
-                        
-                        // Create dates in local timezone using the Date constructor
-                        // This ensures the hour is interpreted as local time, not UTC
-                        const eventDate = new Date(year, month, day, clampedHour, 0, 0, 0);
-                        const endDate = new Date(year, month, day, clampedHour + 1, 0, 0, 0);
-                        
-                        // Verify the date was created correctly
-                        const actualHour = eventDate.getHours();
-                        if (actualHour !== clampedHour) {
-                          console.warn('Date hour mismatch:', {
-                            locationY,
-                            hourOffset,
-                            calculatedHour: hour,
-                            clampedHour,
-                            actualHour,
-                          });
-                        }
-                        
-                        const newEvent: CalendarEvent = {
-                          id: `temp-${Date.now()}`,
-                          title: '',
-                          description: '',
-                          start_time: eventDate.toISOString(),
-                          end_time: endDate.toISOString(),
-                          is_all_day: false,
-                          source_type: 'posthive',
-                          calendar_name: 'PostHive',
-                          calendar_color: theme.colors.accent,
-                          created_by: user?.id || '',
-                          workspace_id: currentWorkspace?.id || '',
-                          visibility: 'workspace',
-                        };
-                        
-                        setSelectedEvent(newEvent);
-                        setShowEventDetail(true);
-                      }}
-                    >
-                      <View style={styles.timelineInner}>
-                      {/* Hour markers */}
-                      {Array.from({length: TOTAL_HOURS}, (_, i) => i + START_HOUR).map(
-                        hour => (
-                          <View
-                            key={hour}
-                            style={[
-                              styles.hourRow,
-                              {top: (hour - START_HOUR) * PX_PER_HOUR},
-                            ]}>
-                            <Text style={styles.hourLabel}>
-                              {safeFormat(new Date(2024, 0, 1, hour, 0), 'h a', `${hour}:00`)}
-                            </Text>
-                            <View style={styles.hourLine} />
-                          </View>
-                        ),
-                      )}
-
-                      {/* Events layer */}
-                      <View style={styles.eventsContainer}>
-                        {/* Blocked times */}
-                        {blockedTimesForDay.map(blocked => (
-                          <BlockedTimeCard key={blocked.id} blocked={blocked} />
-                        ))}
-
-                        {/* Scheduled tasks */}
-                        {scheduledTasksForDay.map(task => (
-                          <ScheduledTaskCard key={task.id} task={task} />
-                        ))}
-
-                        {/* Calendar events */}
-                        {timedEvents.map(event => {
-                          const position = eventPositions.get(event.id);
-                          return (
-                            <EventCard 
-                              key={event.id} 
-                              event={event}
-                              collisionPosition={position}
-                              onPress={() => {
-                                setSelectedEvent(event);
-                                setShowEventDetail(true);
-                              }}
-                            />
-                          );
-                        })}
-
-                        {/* Deadline indicators (only timed deadlines, all-day shown at top) */}
-                        {timedDeadlines.map(deadline => (
-                          <DeadlineIndicator key={deadline.id} deadline={deadline} />
-                        ))}
-
-                        {/* Current time indicator */}
-                        {isToday(selectedDate) && <CurrentTimeIndicator />}
-                      </View>
-                      </View>
-                    </Pressable>
-                  </View>
-
-                  {/* Scroll indicators for off-screen events */}
-                  {eventsAbove > 0 && (
-                    <TouchableOpacity 
-                      style={styles.scrollIndicatorTop}
-                      onPress={() => scrollViewRef.current?.scrollTo({y: 0, animated: true})}>
-                      <ChevronUp size={16} color={theme.colors.accent} />
-                      <Text style={styles.scrollIndicatorText}>{eventsAbove} above</Text>
-                    </TouchableOpacity>
-                  )}
-                  {eventsBelow > 0 && (
-                    <TouchableOpacity 
-                      style={styles.scrollIndicatorBottom}
-                      onPress={() => scrollViewRef.current?.scrollToEnd({animated: true})}>
-                      <Text style={styles.scrollIndicatorText}>{eventsBelow} below</Text>
-                      <ChevronDown size={16} color={theme.colors.accent} />
-                    </TouchableOpacity>
-                  )}
-
-                  {/* Empty state for schedule */}
-                  {!hasScheduleContent && (
-                    <View style={styles.emptyState}>
-                      <CalendarIcon size={40} color={theme.colors.textMuted} />
-                      <Text style={styles.emptyTitle}>NO EVENTS</Text>
-                      <Text style={styles.emptySubtitle}>
-                        Your schedule is clear for this day
-                      </Text>
-                    </View>
-                  )}
-                </>
-              )}
-
-              {/* TASKS TAB CONTENT */}
-              {activeTab === 'tasks' && (
-                <View style={styles.tasksTabContent}>
-                  {/* Open Tasks (pending + in_progress) */}
-                  {(pendingTodos.length > 0 || inProgressTodos.length > 0) && (
-                    <View style={styles.taskCategorySection}>
-                      <View style={styles.taskCategoryHeader}>
-                        <Text style={styles.taskCategoryLabel}>OPEN</Text>
-                        <Text style={styles.taskCategoryCount}>
-                          {pendingTodos.length + inProgressTodos.length}
-                        </Text>
-                      </View>
-                      {inProgressTodos.map(todo => (
-                        <TaskCard 
-                          key={todo.id} 
-                          todo={todo} 
-                          isOverdue={overdueTodos.some(t => t.id === todo.id)}
-                        />
-                      ))}
-                      {pendingTodos.map(todo => (
-                        <TaskCard 
-                          key={todo.id} 
-                          todo={todo} 
-                          isOverdue={overdueTodos.some(t => t.id === todo.id)}
-                        />
-                      ))}
-                    </View>
-                  )}
-
-                  {/* Completed Tasks */}
-                  {completedTodos.length > 0 && (
-                    <View style={styles.taskCategorySection}>
-                      <View style={styles.taskCategoryHeader}>
-                        <Text style={styles.taskCategoryLabel}>COMPLETED</Text>
-                        <Text style={styles.taskCategoryCount}>{completedTodos.length}</Text>
-                      </View>
-                      {completedTodos.map(todo => (
-                        <TaskCard key={todo.id} todo={todo} />
-                      ))}
-                    </View>
-                  )}
-
-                  {/* Empty state for tasks */}
-                  {!hasTasksContent && (
-                    <View style={styles.emptyState}>
-                      <ListChecks size={40} color={theme.colors.textMuted} />
-                      <Text style={styles.emptyTitle}>NO TASKS</Text>
-                      <Text style={styles.emptySubtitle}>
-                        No tasks to show
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              )}
-            </>
-          )}
-        </ScrollView>
-      </Animated.View>
-
-      {/* Next Event Bar - Fixed at bottom */}
-      {nextUpcoming && (
-        <NextEventBar 
-          item={nextUpcoming}
-          onPress={handleNextEventPress}
-        />
-      )}
-
-
-
-      {/* Month Picker Modal */}
-      <MonthPickerModal
-        visible={showMonthPicker}
-        selectedDate={selectedDate}
-        onSelectDate={handleSelectDate}
-        onClose={() => setShowMonthPicker(false)}
-        todos={todos}
-        scheduledTasks={scheduledTasks}
-        calendarEvents={calendarEvents}
-      />
-
-      {/* Focus Mode Modal */}
-      <FocusModeModal
-        visible={showFocusMode}
-        task={activeTask}
-        onClose={() => setShowFocusMode(false)}
-        onComplete={async () => {
-          if (activeTask && user?.id) {
-            await updateTodoStatus(activeTask.id, 'completed', user.id);
-            await refresh();
-          }
+      {/* Day items modal */}
+      <DayItemsModal
+        visible={showDayDetail}
+        date={dayDetailDate}
+        events={dayDetailDate ? eventsByDayKey.get(formatDateKey(dayDetailDate)) || [] : []}
+        deadlines={dayDetailDate ? deadlinesByDayKey.get(formatDateKey(dayDetailDate)) || [] : []}
+        onEventPress={ev => {
+          setSelectedEvent(ev);
+          setShowEventDetail(true);
         }}
+        onClose={() => setShowDayDetail(false)}
       />
-
 
       {/* Event Detail Modal */}
       <EventDetailModal
@@ -1124,18 +541,7 @@ function MonthPickerModal({
 
   // Generate calendar days
   const calendarDays = useMemo(() => {
-    try {
-      if (!isValid(viewDate)) {
-        return [];
-      }
-      const monthStart = startOfMonth(viewDate);
-      const monthEnd = endOfMonth(viewDate);
-      const calendarStart = startOfWeek(monthStart);
-      const calendarEnd = endOfWeek(monthEnd);
-      return eachDayOfInterval({start: calendarStart, end: calendarEnd});
-    } catch {
-      return [];
-    }
+    return getCalendarDaysForMonth(viewDate);
   }, [viewDate]);
 
   // Check if a day has events and get event counts
@@ -1242,8 +648,8 @@ function MonthPickerModal({
           showsVerticalScrollIndicator={false}>
           {/* Week day labels */}
           <View style={monthPickerStyles.weekDays}>
-            {['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map(day => (
-              <Text key={day} style={monthPickerStyles.weekDayLabel}>
+            {['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map((day, i) => (
+              <Text key={`${day}-${i}`} style={monthPickerStyles.weekDayLabel}>
                 {day}
               </Text>
             ))}
@@ -1971,6 +1377,469 @@ const monthPickerStyles = StyleSheet.create({
     color: theme.colors.accent,
   },
 });
+
+const STICKY_WEEK_HEADER_HEIGHT =
+  theme.spacing.xs + theme.spacing.xs + 18 + theme.spacing.xs / 2;
+
+const DEADLINE_COLOR = '#f59e0b';
+const DEFAULT_EVENT_COLOR = '#3b82f6';
+const PRIVATE_EVENT_COLOR = '#a855f7';
+const MAX_BARS_PER_DAY = 3;
+
+const CAL_DAY_CELL_HEIGHT = Math.max(48, CAL_CELL_W * 1.15);
+
+const continuousCalendarStyles = StyleSheet.create({
+  stickyWeekRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: SCREEN_WIDTH,
+    paddingHorizontal: CAL_MONTH_PAD_H,
+    paddingTop: 6,
+    paddingBottom: 6,
+    backgroundColor: theme.colors.background,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  stickyWeekCell: {
+    width: CAL_CELL_W,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stickyWeekLetter: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    fontFamily: theme.typography.fontFamily.semibold,
+    letterSpacing: 0.5,
+    textAlign: 'center',
+  },
+  monthSection: {
+    paddingHorizontal: CAL_MONTH_PAD_H,
+    paddingTop: 2,
+    paddingBottom: CAL_MONTH_SECTION_BOTTOM_PAD,
+  },
+  monthStickyTitle: {
+    paddingHorizontal: CAL_MONTH_PAD_H,
+    paddingVertical: 6,
+    backgroundColor: theme.colors.background,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  monthSectionTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.lg,
+    fontFamily: theme.typography.fontFamily.bold,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+    paddingHorizontal: 2,
+  },
+  monthGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  monthDayCell: {
+    width: CAL_CELL_W,
+    height: CAL_DAY_CELL_HEIGHT,
+    paddingTop: 2,
+    paddingHorizontal: 1,
+    borderRadius: 6,
+    backgroundColor: 'transparent',
+    alignItems: 'stretch',
+  },
+  monthDayCellSelected: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  monthDayCellPressed: {
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    transform: [{scale: 0.96}],
+  },
+  dayNumberRow: {
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  dayNumber: {
+    color: theme.colors.textPrimary,
+    fontSize: 12,
+    fontFamily: theme.typography.fontFamily.semibold,
+    textAlign: 'center',
+  },
+  dayNumberOther: {
+    color: theme.colors.textMuted,
+    opacity: 0.5,
+  },
+  dayNumberToday: {
+    color: '#000',
+    backgroundColor: '#fff',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    overflow: 'hidden',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  barsStack: {
+    marginTop: 2,
+    gap: 2,
+  },
+  bar: {
+    height: 3,
+    borderRadius: 1.5,
+    width: '100%',
+  },
+  moreText: {
+    color: theme.colors.textMuted,
+    fontSize: 8,
+    textAlign: 'center',
+    marginTop: 1,
+  },
+});
+
+function ContinuousCalendarMonthGrid({
+  monthAnchor,
+  selectedDate,
+  onSelectDay,
+  eventsByDayKey,
+  deadlinesByDayKey,
+}: {
+  monthAnchor: Date;
+  selectedDate: Date;
+  onSelectDay: (d: Date) => void;
+  eventsByDayKey: Map<string, CalendarEvent[]>;
+  deadlinesByDayKey: Map<string, Deadline[]>;
+}) {
+  const calendarDays = useMemo(
+    () => getCalendarDaysForMonth(monthAnchor),
+    [monthAnchor],
+  );
+
+  return (
+    <View style={continuousCalendarStyles.monthSection}>
+      <View style={continuousCalendarStyles.monthGrid}>
+        {calendarDays.map((day, index) => {
+          const inMonth = isSameMonth(day, monthAnchor);
+          const isSelected = isSameDay(day, selectedDate);
+          const isTodayDate = isToday(day);
+          const key = formatDateKey(day);
+          const dayEvents = eventsByDayKey.get(key) || [];
+          const dayDeadlines = deadlinesByDayKey.get(key) || [];
+
+          // Build colored bars: events (with calendar color) first, then deadlines
+          const bars: {key: string; color: string}[] = [];
+          for (const ev of dayEvents) {
+            if (bars.length >= MAX_BARS_PER_DAY) break;
+            const color = ev.calendar_color
+              || (ev.visibility === 'private' ? PRIVATE_EVENT_COLOR : DEFAULT_EVENT_COLOR);
+            bars.push({key: `e-${ev.id}`, color});
+          }
+          for (const dl of dayDeadlines) {
+            if (bars.length >= MAX_BARS_PER_DAY) break;
+            bars.push({key: `d-${dl.id}`, color: DEADLINE_COLOR});
+          }
+          const overflow = (dayEvents.length + dayDeadlines.length) - bars.length;
+
+          return (
+            <Pressable
+              key={`${day.toISOString()}-${index}`}
+              onPress={() => {
+                triggerCalendarTapHaptic();
+                onSelectDay(day);
+              }}
+              unstable_pressDelay={120}
+              hitSlop={2}
+              style={({pressed}) => [
+                continuousCalendarStyles.monthDayCell,
+                isSelected && continuousCalendarStyles.monthDayCellSelected,
+                pressed && continuousCalendarStyles.monthDayCellPressed,
+              ]}>
+              <View style={continuousCalendarStyles.dayNumberRow}>
+                <Text
+                  style={[
+                    continuousCalendarStyles.dayNumber,
+                    !inMonth && continuousCalendarStyles.dayNumberOther,
+                    isTodayDate && continuousCalendarStyles.dayNumberToday,
+                  ]}>
+                  {safeFormat(day, 'd', '-')}
+                </Text>
+              </View>
+              {inMonth && bars.length > 0 && (
+                <View style={continuousCalendarStyles.barsStack}>
+                  {bars.map(b => (
+                    <View
+                      key={b.key}
+                      style={[continuousCalendarStyles.bar, {backgroundColor: b.color}]}
+                    />
+                  ))}
+                  {overflow > 0 && (
+                    <Text style={continuousCalendarStyles.moreText}>+{overflow}</Text>
+                  )}
+                </View>
+              )}
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+// ===== DAY ITEMS MODAL =====
+
+const dayItemsStyles = StyleSheet.create({
+  overlayLayer: {
+    zIndex: 900,
+    elevation: 30,
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: theme.colors.background,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    maxHeight: '70%',
+    paddingBottom: theme.spacing.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
+  handle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    backgroundColor: theme.colors.border,
+    borderRadius: 2,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  header: {
+    paddingHorizontal: theme.spacing.lg,
+    paddingBottom: theme.spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  title: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.lg,
+    fontFamily: theme.typography.fontFamily.bold,
+  },
+  closeBtn: {
+    padding: 4,
+  },
+  list: {
+    paddingHorizontal: theme.spacing.lg,
+  },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: theme.spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  itemColorBar: {
+    width: 4,
+    alignSelf: 'stretch',
+    borderRadius: 2,
+    marginRight: 12,
+  },
+  itemBody: {
+    flex: 1,
+  },
+  itemTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.md,
+    fontFamily: theme.typography.fontFamily.semibold,
+  },
+  itemMeta: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.fontSize.sm,
+    marginTop: 2,
+  },
+  emptyText: {
+    color: theme.colors.textMuted,
+    textAlign: 'center',
+    paddingVertical: theme.spacing.xl,
+  },
+});
+
+function DayItemsModal({
+  visible,
+  date,
+  events,
+  deadlines,
+  onEventPress,
+  onClose,
+}: {
+  visible: boolean;
+  date: Date | null;
+  events: CalendarEvent[];
+  deadlines: Deadline[];
+  onEventPress: (e: CalendarEvent) => void;
+  onClose: () => void;
+}) {
+  const sortedEvents = useMemo(() => {
+    return [...events].sort((a, b) => {
+      const at = new Date(a.start_time).getTime();
+      const bt = new Date(b.start_time).getTime();
+      return at - bt;
+    });
+  }, [events]);
+
+  // We need this drawer to render OVER the iOS native UITabBar (which is a
+  // sibling UIView outside our React tree). Only `Modal` reliably escapes
+  // that hierarchy on iOS. To avoid the native Modal slide latency
+  // (~300–350ms), we mount the Modal with `animationType="none"` so the
+  // window appears instantly, then drive the slide ourselves via the
+  // native-driver Animated API for a snappy ~180ms in / ~140ms out.
+  const slideY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
+  const fade = useRef(new Animated.Value(0)).current;
+  const [mounted, setMounted] = useState(false);
+  const mountedRef = useRef(false);
+  // Snapshot the last shown date/events/deadlines so the list doesn't blank
+  // out while the sheet is animating closed.
+  const lastDateRef = useRef<Date | null>(date);
+  const lastEventsRef = useRef(sortedEvents);
+  const lastDeadlinesRef = useRef(deadlines);
+  if (date) lastDateRef.current = date;
+  if (visible) {
+    lastEventsRef.current = sortedEvents;
+    lastDeadlinesRef.current = deadlines;
+  }
+  const shownEvents = visible ? sortedEvents : lastEventsRef.current;
+  const shownDeadlines = visible ? deadlines : lastDeadlinesRef.current;
+
+  useEffect(() => {
+    if (visible) {
+      // Reset to off-screen so the open animation always plays from the
+      // bottom, then mount the Modal. We use a ref (not state) to track
+      // mount status so this effect doesn't retrigger when we flip it.
+      slideY.setValue(SCREEN_HEIGHT);
+      fade.setValue(0);
+      if (!mountedRef.current) {
+        mountedRef.current = true;
+        setMounted(true);
+      }
+      // Kick the animation off on the next frame so the Modal has had a
+      // chance to lay out before the native driver starts driving.
+      requestAnimationFrame(() => {
+        Animated.parallel([
+          Animated.timing(fade, {
+            toValue: 1,
+            duration: 140,
+            useNativeDriver: true,
+          }),
+          Animated.spring(slideY, {
+            toValue: 0,
+            damping: 26,
+            stiffness: 320,
+            mass: 0.55,
+            overshootClamping: true,
+            restSpeedThreshold: 0.5,
+            restDisplacementThreshold: 0.5,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      });
+    } else if (mountedRef.current) {
+      Animated.parallel([
+        Animated.timing(fade, {
+          toValue: 0,
+          duration: 120,
+          useNativeDriver: true,
+        }),
+        Animated.timing(slideY, {
+          toValue: SCREEN_HEIGHT,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+      ]).start(({finished}) => {
+        if (finished) {
+          mountedRef.current = false;
+          setMounted(false);
+        }
+      });
+    }
+  }, [visible, fade, slideY]);
+
+  const displayDate = date || lastDateRef.current;
+
+  return (
+    <Modal
+      visible={mounted}
+      transparent
+      animationType="none"
+      statusBarTranslucent
+      hardwareAccelerated
+      onRequestClose={onClose}>
+      <Animated.View
+        pointerEvents={visible ? 'auto' : 'none'}
+        style={[StyleSheet.absoluteFillObject, dayItemsStyles.overlayLayer, {opacity: fade}]}>
+        <Pressable style={dayItemsStyles.overlay} onPress={onClose}>
+          <Animated.View
+            style={[dayItemsStyles.sheet, {transform: [{translateY: slideY}]}]}
+            // Stop touches on the sheet from closing the overlay.
+            onStartShouldSetResponder={() => true}>
+          <View style={dayItemsStyles.handle} />
+          <View style={dayItemsStyles.header}>
+            <Text style={dayItemsStyles.title}>
+              {displayDate ? safeFormat(displayDate, 'EEEE, MMM d', '') : ''}
+            </Text>
+            <TouchableOpacity style={dayItemsStyles.closeBtn} onPress={onClose}>
+              <X size={20} color={theme.colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={dayItemsStyles.list}>
+            {shownEvents.length === 0 && shownDeadlines.length === 0 && (
+              <Text style={dayItemsStyles.emptyText}>No events or deadlines</Text>
+            )}
+            {shownEvents.map(ev => {
+              const color =
+                ev.calendar_color
+                || (ev.visibility === 'private' ? '#a855f7' : '#3b82f6');
+              const timeStr = ev.is_all_day
+                ? 'All day'
+                : `${safeFormat(new Date(ev.start_time), 'h:mm a', '')} – ${safeFormat(new Date(ev.end_time), 'h:mm a', '')}`;
+              return (
+                <TouchableOpacity
+                  key={`ev-${ev.id}`}
+                  style={dayItemsStyles.itemRow}
+                  onPress={() => onEventPress(ev)}
+                  activeOpacity={0.7}>
+                  <View style={[dayItemsStyles.itemColorBar, {backgroundColor: color}]} />
+                  <View style={dayItemsStyles.itemBody}>
+                    <Text style={dayItemsStyles.itemTitle} numberOfLines={2}>
+                      {ev.title || 'Untitled event'}
+                    </Text>
+                    <Text style={dayItemsStyles.itemMeta}>
+                      {timeStr}
+                      {ev.calendar_name ? `  •  ${ev.calendar_name}` : ''}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+            {shownDeadlines.map(dl => (
+              <View key={`dl-${dl.id}`} style={dayItemsStyles.itemRow}>
+                <View style={[dayItemsStyles.itemColorBar, {backgroundColor: '#f59e0b'}]} />
+                <View style={dayItemsStyles.itemBody}>
+                  <Text style={dayItemsStyles.itemTitle} numberOfLines={2}>
+                    {dl.title}
+                  </Text>
+                  <Text style={dayItemsStyles.itemMeta}>
+                    Deadline{dl.due_time ? `  •  ${dl.due_time.slice(0, 5)}` : ''}
+                  </Text>
+                </View>
+              </View>
+            ))}
+            <View style={{height: 24}} />
+          </ScrollView>
+          </Animated.View>
+        </Pressable>
+      </Animated.View>
+    </Modal>
+  );
+}
 
 // ===== EVENT DETAIL MODAL =====
 
@@ -2747,6 +2616,10 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing.xs,
     paddingHorizontal: theme.spacing.sm,
   },
+  dateDisplayFullWidth: {
+    flex: 1,
+    justifyContent: 'center',
+  },
   dateText: {
     color: theme.colors.textPrimary,
     fontSize: theme.typography.fontSize.lg,
@@ -2759,6 +2632,9 @@ const styles = StyleSheet.create({
   scrollViewContent: {
     minHeight: TOTAL_HOURS * PX_PER_HOUR + 400, // Ensure enough height for all hours + padding
     paddingBottom: 200, // Extra padding at bottom for events after 11 PM
+  },
+  calendarScrollContent: {
+    paddingBottom: 120,
   },
   // Summary strip
   summaryStrip: {

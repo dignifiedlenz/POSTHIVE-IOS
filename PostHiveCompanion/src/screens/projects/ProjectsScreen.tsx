@@ -7,24 +7,24 @@ import {
   TouchableOpacity,
   Image,
   RefreshControl,
-  ActivityIndicator,
   Dimensions,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
 import {StackNavigationProp} from '@react-navigation/stack';
-import {Folder, Archive, Film} from 'lucide-react-native';
+import {Folder, Archive} from 'lucide-react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {theme} from '../../theme';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useAuth} from '../../hooks/useAuth';
 import {getProjects} from '../../lib/api';
 import {Project} from '../../lib/types';
-import {ReviewStackParamList} from '../../app/App';
+import {ProjectsStackParamList} from '../../app/App';
 
-type NavigationProp = StackNavigationProp<ReviewStackParamList, 'ProjectsList'>;
+type NavigationProp = StackNavigationProp<ProjectsStackParamList, 'Projects'>;
 
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
+const DEFAULT_THUMBNAIL = 'https://www.posthive.app/thumbnail/default.png';
 const CARD_WIDTH = SCREEN_WIDTH;
 const CARD_HEIGHT = 88;
 
@@ -36,44 +36,39 @@ interface ProjectCardProps {
 function ProjectCard({project, onPress}: ProjectCardProps) {
   const isArchived = project.status === 'archived';
   const clientName = project.client?.name || project.client_name;
-  
+  const thumb =
+    project.thumbnail_url ||
+    (project as Project & {thumbnail?: string}).thumbnail;
+
   return (
-    <TouchableOpacity 
-      style={[styles.projectCard, isArchived && styles.projectCardArchived]} 
-      onPress={onPress} 
-      activeOpacity={0.85}
-    >
-      {/* Background image or placeholder */}
-      {project.thumbnail_url ? (
-        <Image
-          source={{uri: project.thumbnail_url}}
-          style={styles.cardImage}
-          resizeMode="cover"
-        />
+    <TouchableOpacity
+      style={[styles.projectCard, isArchived && styles.projectCardArchived]}
+      onPress={onPress}
+      activeOpacity={0.85}>
+      {thumb ? (
+        <Image source={{uri: thumb}} style={styles.cardImage} resizeMode="cover" />
       ) : (
         <View style={styles.placeholderBackground}>
           <Folder size={28} color="rgba(255,255,255,0.15)" />
         </View>
       )}
-      
-      {/* Gradient overlay - left to right fade */}
+
       <LinearGradient
         colors={['rgba(0,0,0,0.8)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.2)', 'transparent']}
         start={{x: 0, y: 0.5}}
         end={{x: 1, y: 0.5}}
         style={styles.gradientOverlay}
       />
-      
-      {/* Content - left aligned, vertically centered */}
+
       <View style={styles.cardContent}>
         <Text style={styles.projectName} numberOfLines={1}>
           {project.name}
         </Text>
-        {clientName && (
+        {clientName ? (
           <Text style={styles.clientName} numberOfLines={1}>
             {clientName.toUpperCase()}
           </Text>
-        )}
+        ) : null}
       </View>
     </TouchableOpacity>
   );
@@ -117,11 +112,14 @@ export function ProjectsScreen() {
 
   const handleProjectPress = (project: Project) => {
     const clientName = project.client?.name || project.client_name;
+    const thumb =
+      project.thumbnail_url ||
+      (project as Project & {thumbnail?: string}).thumbnail;
     navigation.navigate('ProjectDeliverables', {
-      projectId: project.id, 
+      projectId: project.id,
       projectName: project.name,
       clientName: clientName,
-      thumbnailUrl: project.thumbnail_url,
+      thumbnailUrl: thumb,
     });
   };
 
@@ -141,10 +139,10 @@ export function ProjectsScreen() {
           </View>
         </View>
         {archivedProjects.map(project => (
-          <ProjectCard 
-            key={project.id} 
-            project={project} 
-            onPress={() => handleProjectPress(project)} 
+          <ProjectCard
+            key={project.id}
+            project={project}
+            onPress={() => handleProjectPress(project)}
           />
         ))}
       </View>
@@ -152,17 +150,16 @@ export function ProjectsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Section header with count and Series link */}
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionLabel}>PROJECTS</Text>
+        <Text style={styles.sectionTitle}>Projects</Text>
         <View style={styles.headerRight}>
           <Text style={styles.sectionCount}>{projects.length}</Text>
           <TouchableOpacity
             style={styles.seriesLink}
             onPress={() => navigation.navigate('SeriesList')}
             hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
-            <Film size={14} color={theme.colors.textMuted} />
+            <Image source={{uri: DEFAULT_THUMBNAIL}} style={styles.seriesLinkThumb} resizeMode="cover" />
             <Text style={styles.seriesLinkText}>SERIES</Text>
           </TouchableOpacity>
         </View>
@@ -203,7 +200,7 @@ export function ProjectsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'transparent', // Show wave background
+    backgroundColor: 'transparent',
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -215,11 +212,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
-  sectionLabel: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
+  sectionTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 17,
     fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 2,
   },
   headerRight: {
     flexDirection: 'row',
@@ -237,16 +233,16 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 8,
   },
+  seriesLinkThumb: {
+    width: 14,
+    height: 14,
+    opacity: 0.85,
+  },
   seriesLinkText: {
     color: theme.colors.textMuted,
     fontSize: 10,
     fontFamily: theme.typography.fontFamily.semibold,
     letterSpacing: 1.5,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   list: {
     paddingBottom: theme.spacing.xl,
@@ -255,8 +251,6 @@ const styles = StyleSheet.create({
     width: CARD_WIDTH,
     height: CARD_HEIGHT,
     overflow: 'hidden',
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
     position: 'relative',
   },
   projectCardArchived: {
@@ -293,8 +287,6 @@ const styles = StyleSheet.create({
   },
   archivedSection: {
     marginTop: theme.spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
   },
   divider: {
     flexDirection: 'row',

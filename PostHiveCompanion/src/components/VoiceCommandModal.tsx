@@ -27,6 +27,7 @@ try {
 import {theme} from '../theme';
 import {executeAICommand, AICommandResult} from '../lib/api';
 import {useAuth} from '../hooks/useAuth';
+import {GlassComposerBar} from './GlassComposerBar';
 
 interface VoiceCommandModalProps {
   visible: boolean;
@@ -426,7 +427,7 @@ export function VoiceCommandModal({
               {/* Input for response and action buttons - only show when typing is complete */}
               {!isTyping && (
                 <>
-                  <View style={styles.inputContainer}>
+                  <GlassComposerBar style={styles.inputGlassWrap} contentStyle={styles.inputGlassInner}>
                     <TextInput
                       ref={textOnly ? inputRef : undefined}
                       style={styles.input}
@@ -469,7 +470,7 @@ export function VoiceCommandModal({
                         <Send size={20} color={theme.colors.accentText} />
                       </TouchableOpacity>
                     )}
-                  </View>
+                  </GlassComposerBar>
 
                   <View style={styles.answerActions}>
                     {!textOnly && voiceAvailable && (
@@ -599,7 +600,7 @@ export function VoiceCommandModal({
               </Text>
 
               {/* Transcript/Input */}
-              <View style={styles.inputContainer}>
+              <GlassComposerBar style={styles.inputGlassWrap} contentStyle={styles.inputGlassInner}>
                 <TextInput
                   ref={textOnly ? inputRef : undefined}
                   style={styles.input}
@@ -618,7 +619,7 @@ export function VoiceCommandModal({
                     <Send size={20} color={theme.colors.accentText} />
                   </TouchableOpacity>
                 )}
-              </View>
+              </GlassComposerBar>
 
               {/* Action buttons - only show for voice mode */}
               {!textOnly && (
@@ -718,17 +719,12 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing.lg,
     textAlign: 'center',
   },
-  inputContainer: {
+  inputGlassWrap: {
     width: '100%',
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    backgroundColor: theme.colors.surfaceElevated,
-    borderRadius: theme.borderRadius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
     marginBottom: theme.spacing.md,
+  },
+  inputGlassInner: {
+    alignItems: 'flex-end',
     minHeight: 50,
   },
   input: {

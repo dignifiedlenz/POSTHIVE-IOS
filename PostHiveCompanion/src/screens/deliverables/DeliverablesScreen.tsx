@@ -13,7 +13,7 @@ import {
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
 import {StackNavigationProp} from '@react-navigation/stack';
-import {Film, MessageCircle, ChevronRight} from 'lucide-react-native';
+import {MessageCircle, ChevronRight} from 'lucide-react-native';
 import {formatDistanceToNow} from 'date-fns';
 import LinearGradient from 'react-native-linear-gradient';
 import {theme} from '../../theme';
@@ -21,15 +21,13 @@ import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useAuth} from '../../hooks/useAuth';
 import {useDeliverables} from '../../hooks/useDeliverables';
 import {Deliverable} from '../../lib/types';
-import {DeliverablesStackParamList} from '../../app/App';
+import {HomeStackParamList} from '../../app/App';
 
-type NavigationProp = StackNavigationProp<
-  DeliverablesStackParamList,
-  'DeliverablesList'
->;
+type NavigationProp = StackNavigationProp<HomeStackParamList, 'Dashboard'>;
 
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
 const CARD_HEIGHT = 220;
+const DEFAULT_THUMBNAIL = 'https://www.posthive.app/thumbnail/default.png';
 
 interface DeliverableCardProps {
   deliverable: Deliverable;
@@ -59,7 +57,7 @@ function DeliverableThumbnailCard({deliverable, onPress}: DeliverableCardProps) 
         />
       ) : (
         <View style={styles.thumbnailPlaceholder}>
-          <Film size={48} color={theme.colors.textMuted} />
+          <Image source={{uri: DEFAULT_THUMBNAIL}} style={styles.defaultThumb} resizeMode="cover" />
         </View>
       )}
       
@@ -108,7 +106,8 @@ export function DeliverablesScreen() {
 
   const handleDeliverablePress = useCallback(
     (deliverable: Deliverable) => {
-      navigation.navigate('DeliverableReview', {
+      // DeliverableReview is a root-stack screen; cast bypasses the inner stack typing.
+      (navigation as any).navigate('DeliverableReview', {
         deliverableId: deliverable.id,
       });
     },
@@ -116,12 +115,12 @@ export function DeliverablesScreen() {
   );
 
   const handleShowAllProjects = useCallback(() => {
-    navigation.navigate('Projects');
+    (navigation as any).navigate('Projects', {screen: 'Projects'});
   }, [navigation]);
 
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
-      <Film size={40} color={theme.colors.textMuted} />
+      <Image source={{uri: DEFAULT_THUMBNAIL}} style={styles.emptyThumb} resizeMode="cover" />
       <Text style={styles.emptyTitle}>NO ITEMS TO REVIEW</Text>
       <Text style={styles.emptySubtitle}>
         Deliverables with recent activity will appear here
@@ -234,6 +233,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  defaultThumb: {
+    width: '100%',
+    height: '100%',
+    opacity: 0.9,
+  },
   bottomGradient: {
     position: 'absolute',
     left: 0,
@@ -275,8 +279,9 @@ const styles = StyleSheet.create({
   },
   deliverableName: {
     color: theme.colors.textPrimary,
-    fontSize: 20,
-    fontFamily: theme.typography.fontFamily.semibold,
+    fontSize: 22,
+    fontFamily: theme.typography.fontFamily.bold,
+    fontWeight: '700',
   },
   subtitle: {
     color: 'rgba(255, 255, 255, 0.6)',
@@ -294,6 +299,11 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.borderHover,
     marginTop: theme.spacing.md,
     marginHorizontal: theme.spacing.md,
+  },
+  emptyThumb: {
+    width: 56,
+    height: 56,
+    opacity: 0.85,
   },
   emptyTitle: {
     color: theme.colors.textPrimary,

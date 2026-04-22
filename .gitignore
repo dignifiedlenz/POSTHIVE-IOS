@@ -20,8 +20,8 @@ xcuserdata/
 *.moved-aside
 *.xcuserstate
 *.xcscmblueprint
-*.xcworkspace
-!default.xcworkspace
+# Track CocoaPods/RN workspaces (needed for iOS); ignore only user workspace data if present elsewhere
+# *.xcworkspace — do not ignore: PostHiveCompanion/ios/*.xcworkspace must be committed
 
 # Swift Package Manager
 .build/

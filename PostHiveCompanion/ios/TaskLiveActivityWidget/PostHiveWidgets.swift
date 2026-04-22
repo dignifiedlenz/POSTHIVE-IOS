@@ -49,6 +49,13 @@ struct TransferProgress: Codable {
     var startedAt: Date
 }
 
+struct RecentTransferItem: Codable, Identifiable {
+    var id: String
+    var fileName: String
+    var isUpload: Bool
+    var completedAt: Date
+}
+
 struct ActivityItem: Codable, Identifiable {
     var id: String
     var type: ActivityType
@@ -200,6 +207,22 @@ struct WidgetDataProvider {
             return try decoder.decode(TransferProgress.self, from: data)
         } catch {
             return nil
+        }
+    }
+
+    func getRecentTransfers() -> [RecentTransferItem] {
+        guard let defaults = userDefaults,
+              let data = defaults.data(forKey: "widgetRecentTransfers") else {
+            return []
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        do {
+            return try decoder.decode([RecentTransferItem].self, from: data)
+        } catch {
+            return []
         }
     }
     
@@ -1227,24 +1250,31 @@ struct MediumDeliverableContent: View {
 struct TransferTimelineEntry: TimelineEntry {
     let date: Date
     let transfer: TransferProgress?
+    let recentTransfers: [RecentTransferItem]
 }
 
 struct TransferTimelineProvider: TimelineProvider {
     typealias Entry = TransferTimelineEntry
     
     func placeholder(in context: Context) -> TransferTimelineEntry {
-        TransferTimelineEntry(date: Date(), transfer: sampleTransfer)
+        TransferTimelineEntry(date: Date(), transfer: sampleTransfer, recentTransfers: sampleRecentTransfers)
     }
     
     func getSnapshot(in context: Context, completion: @escaping (TransferTimelineEntry) -> Void) {
         let transfer = WidgetDataProvider.shared.getActiveTransfer()
-        let entry = TransferTimelineEntry(date: Date(), transfer: transfer ?? sampleTransfer)
+        let recentTransfers = WidgetDataProvider.shared.getRecentTransfers()
+        let entry = TransferTimelineEntry(
+            date: Date(),
+            transfer: transfer ?? sampleTransfer,
+            recentTransfers: recentTransfers.isEmpty ? sampleRecentTransfers : recentTransfers
+        )
         completion(entry)
     }
     
     func getTimeline(in context: Context, completion: @escaping (Timeline<TransferTimelineEntry>) -> Void) {
         let transfer = WidgetDataProvider.shared.getActiveTransfer()
-        let entry = TransferTimelineEntry(date: Date(), transfer: transfer)
+        let recentTransfers = WidgetDataProvider.shared.getRecentTransfers()
+        let entry = TransferTimelineEntry(date: Date(), transfer: transfer, recentTransfers: recentTransfers)
         
         // Update more frequently during active transfer
         let minutes = transfer != nil ? 1 : 15
@@ -1263,6 +1293,14 @@ struct TransferTimelineProvider: TimelineProvider {
             isUpload: true,
             startedAt: Date().addingTimeInterval(-300)
         )
+    }
+
+    private var sampleRecentTransfers: [RecentTransferItem] {
+        [
+            RecentTransferItem(id: "t1", fileName: "Final_Export_v3.mov", isUpload: true, completedAt: Date().addingTimeInterval(-300)),
+            RecentTransferItem(id: "t2", fileName: "Client_Feedback.pdf", isUpload: false, completedAt: Date().addingTimeInterval(-900)),
+            RecentTransferItem(id: "t3", fileName: "BehindTheScenes.zip", isUpload: true, completedAt: Date().addingTimeInterval(-1800)),
+        ]
     }
 }
 
@@ -1293,7 +1331,7 @@ struct TransferWidgetView: View {
             if let transfer = entry.transfer {
                 ActiveTransferContent(transfer: transfer)
             } else {
-                NoTransferContent()
+                NoTransferContent(recentTransfers: entry.recentTransfers)
             }
         }
         .widgetURL(URL(string: "posthive://transfers"))
@@ -1383,12 +1421,14 @@ struct ActiveTransferContent: View {
 }
 
 struct NoTransferContent: View {
+    let recentTransfers: [RecentTransferItem]
+
     var body: some View {
         ZStack {
             // Dark overlay for readability
             Color.black.opacity(0.5)
             
-            VStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
             // Header
             HStack {
                 Text("POSTHIVE")
@@ -1397,20 +1437,50 @@ struct NoTransferContent: View {
                 
                 Spacer()
             }
-            .padding(.horizontal, 3)
-            .padding(.top, 3)
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
             
-            Spacer()
-            
-            Image(systemName: "arrow.up.arrow.down.circle")
-                .font(.system(size: 28))
-                .foregroundColor(Color.white.opacity(0.3))
-            
-            Text("No active transfer")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(Color.white.opacity(0.5))
-            
-            Spacer()
+            if recentTransfers.isEmpty {
+                Spacer()
+                HStack {
+                    Spacer()
+                    VStack(spacing: 8) {
+                        Image(systemName: "arrow.up.arrow.down.circle")
+                            .font(.system(size: 28))
+                            .foregroundColor(Color.white.opacity(0.3))
+
+                        Text("No active transfer")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(Color.white.opacity(0.5))
+                    }
+                    Spacer()
+                }
+                Spacer()
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("LAST 5")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(Color.white.opacity(0.45))
+                        .tracking(0.5)
+
+                    ForEach(Array(recentTransfers.prefix(5))) { item in
+                        HStack(spacing: 5) {
+                            Image(systemName: item.isUpload ? "arrow.up.right" : "arrow.down.right")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundColor(Color.white.opacity(0.55))
+
+                            Text(item.fileName)
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            }
             }
         }
     }
@@ -1499,9 +1569,9 @@ struct ActivityWidgetView: View {
                     .foregroundColor(Color.white.opacity(0.5))
                     .tracking(0.5)
             }
-            .padding(.horizontal, family == .systemLarge ? 6 : 3)
-            .padding(.top, family == .systemLarge ? 6 : 3)
-            .padding(.bottom, family == .systemLarge ? 6 : 3)
+            .padding(.horizontal, family == .systemLarge ? 12 : 10)
+            .padding(.top, family == .systemLarge ? 10 : 8)
+            .padding(.bottom, family == .systemLarge ? 8 : 6)
             
             if entry.activities.isEmpty {
                 EmptyActivityView()
@@ -1529,8 +1599,8 @@ struct ActivityWidgetView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, family == .systemLarge ? 6 : 3)
-        .padding(.bottom, family == .systemLarge ? 6 : 3)
+        .padding(.horizontal, family == .systemLarge ? 12 : 10)
+        .padding(.bottom, family == .systemLarge ? 10 : 8)
     }
     
     private var itemCount: Int {
@@ -1671,7 +1741,7 @@ struct EmptyActivityView: View {
         totalBytes: 2_700_000_000,
         isUpload: true,
         startedAt: Date()
-    ))
+    ), recentTransfers: [])
 }
 #endif
 

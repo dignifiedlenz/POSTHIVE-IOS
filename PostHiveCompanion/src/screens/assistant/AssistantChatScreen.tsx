@@ -4,6 +4,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   FlatList,
   StyleSheet,
   KeyboardAvoidingView,
@@ -12,23 +13,22 @@ import {
   Alert,
 } from 'react-native';
 import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
-import {Mic, Send, RotateCcw} from 'lucide-react-native';
+import LinearGradient from 'react-native-linear-gradient';
+import {Mic, RotateCcw} from 'lucide-react-native';
 
 /** Same constant the floating create FAB uses to clear the native tab bar. */
 const TAB_BAR_CLEARANCE = Platform.OS === 'ios' ? 54 : 56;
 import {theme} from '../../theme';
 import {useAuth} from '../../hooks/useAuth';
-import {executeAICommand, type AICommandTurn} from '../../lib/api';
-import {GlassComposerBar} from '../../components/GlassComposerBar';
-import {AppleNativeGlassIconButton} from '../../components/native/AppleNativeGlassIconButton';
+import {
+  executeAICommand,
+  type AICommandTurn,
+  type AICommandData,
+  type AILastCreatedItem,
+} from '../../lib/api';
 import {MarkdownText} from '../../components/MarkdownText';
-
-let Voice: any = null;
-try {
-  Voice = require('@react-native-voice/voice').default;
-} catch {
-  /* optional native module */
-}
+import {AssistantResultCard} from '../../components/AssistantResultCard';
+import {useTabBar} from '../../contexts/TabBarContext';
 
 type ChatRole = 'user' | 'assistant';
 
@@ -36,6 +36,10 @@ interface ChatMessage {
   id: string;
   role: ChatRole;
   text: string;
+  /** Structured tool result payload (when the assistant turn came from a tool call). */
+  data?: AICommandData;
+  /** True when the API explicitly flagged this as a direct answer rather than a tool action. */
+  isAnswer?: boolean;
 }
 
 const ROTATING_HINTS = [
@@ -57,16 +61,26 @@ export function AssistantChatScreen() {
   const insets = useSafeAreaInsets();
   const bottomClearance =
     Math.max(insets.bottom, 8) + TAB_BAR_CLEARANCE + theme.spacing.sm;
+  const {
+    voiceState,
+    voiceAvailable,
+    startVoiceCapture,
+    stopVoiceCapture,
+    pendingVoiceCommand,
+    consumePendingVoiceCommand,
+  } = useTabBar();
+  const isListening = voiceState.isListening;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
-  const [isListening, setIsListening] = useState(false);
-  const [voiceOk, setVoiceOk] = useState(!!Voice);
   const [hintIndex, setHintIndex] = useState(0);
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const submitRef = useRef<(text: string) => Promise<void>>(async () => {});
   const busyRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>([]);
+  // Last item the assistant created in this chat session. Sent on subsequent requests so
+  // follow-up corrections like "actually it's between 4 and 6pm" can route to update_*.
+  const lastCreatedRef = useRef<AILastCreatedItem | null>(null);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -101,7 +115,42 @@ export function AssistantChatScreen() {
       try {
         const result = await executeAICommand(text, currentWorkspace.slug, {
           priorConversation,
+          lastCreatedItem: lastCreatedRef.current,
         });
+
+        // Track newly-created items so follow-ups can correct them in-place.
+        const data = result.data;
+        if (data && typeof data === 'object') {
+          const dType = (data as any).type;
+          // We treat a created/updated event/todo/deliverable/project as the new "last item".
+          if (dType === 'event' && (data as any).eventId) {
+            lastCreatedRef.current = {
+              type: 'event',
+              eventId: (data as any).eventId,
+              id: (data as any).eventId,
+              name: (data as any).title,
+            };
+          } else if (dType === 'todo' && (data as any).id) {
+            lastCreatedRef.current = {
+              type: 'todo',
+              id: (data as any).id,
+              name: (data as any).title || (data as any).name,
+            };
+          } else if (dType === 'deliverable' && (data as any).id) {
+            lastCreatedRef.current = {
+              type: 'deliverable',
+              id: (data as any).id,
+              name: (data as any).name,
+            };
+          } else if (dType === 'project' && (data as any).id) {
+            lastCreatedRef.current = {
+              type: 'project',
+              id: (data as any).id,
+              name: (data as any).name,
+            };
+          }
+        }
+
         setMessages(prev => [
           ...prev,
           {
@@ -110,6 +159,8 @@ export function AssistantChatScreen() {
             text:
               result.message ||
               (result.success ? 'Done.' : 'Something went wrong.'),
+            data: result.data,
+            isAnswer: result.isAnswer,
           },
         ]);
       } catch (e) {
@@ -125,66 +176,46 @@ export function AssistantChatScreen() {
 
   submitRef.current = submit;
 
+  // Auto-submit any committed voice transcript routed to the assistant — whether it came from
+  // the assistant's own mic button or from the global FAB.
   useEffect(() => {
-    if (!Voice) return;
+    if (!pendingVoiceCommand) return;
+    const text = pendingVoiceCommand.text;
+    consumePendingVoiceCommand();
+    void submitRef.current(text);
+  }, [pendingVoiceCommand, consumePendingVoiceCommand]);
 
-    try {
-      Voice.onSpeechStart = () => setIsListening(true);
-      Voice.onSpeechEnd = () => setIsListening(false);
-      Voice.onSpeechResults = (e: {value?: string[]}) => {
-        const t = e.value?.[0]?.trim();
-        setIsListening(false);
-        if (t) void submitRef.current(t);
-      };
-      Voice.onSpeechError = (e: {error?: {code?: string; message?: string}}) => {
-        setIsListening(false);
-        if (e.error?.code !== '7') {
-          Alert.alert('Voice', e.error?.message || 'Speech recognition failed');
-        }
-      };
-    } catch {
-      setVoiceOk(false);
-    }
+  const startListening = useCallback(async () => {
+    if (sending) return;
+    await startVoiceCapture();
+  }, [sending, startVoiceCapture]);
 
-    return () => {
-      try {
-        Voice?.destroy?.().then(() => Voice?.removeAllListeners?.()).catch(() => {});
-      } catch {
-        /* ignore */
-      }
-    };
-  }, []);
-
-  const toggleMic = useCallback(async () => {
-    if (!Voice || !voiceOk) {
-      Alert.alert('Voice', 'Voice recognition is not available on this build.');
-      return;
-    }
-    if (isListening) {
-      try {
-        await Voice.stop();
-      } catch {
-        /* ignore */
-      }
-      setIsListening(false);
-      return;
-    }
-    try {
-      await Voice.start('en-US');
-    } catch (err) {
-      console.error(err);
-      Alert.alert('Voice', 'Could not start listening. Check microphone permission.');
-    }
-  }, [isListening, voiceOk]);
+  const stopListening = useCallback(async () => {
+    await stopVoiceCapture();
+  }, [stopVoiceCapture]);
 
   const resetChat = useCallback(() => {
     if (busyRef.current) return;
     setMessages([]);
     setInput('');
+    lastCreatedRef.current = null;
   }, []);
 
   const renderMessage = useCallback(({item}: {item: ChatMessage}) => {
     const isUser = item.role === 'user';
+    // Assistant turns that carry structured tool-result data render as a rich card outside the
+    // bubble chrome. Plain answers / fallbacks keep the existing bubble + markdown.
+    const hasRichCard =
+      !isUser && item.data && typeof item.data === 'object' && (item.data as any).type;
+
+    if (hasRichCard) {
+      return (
+        <View style={[styles.bubbleWrap, styles.bubbleWrapAssistant, styles.cardWrap]}>
+          <AssistantResultCard message={item.text} data={item.data} />
+        </View>
+      );
+    }
+
     return (
       <View
         style={[
@@ -208,48 +239,76 @@ export function AssistantChatScreen() {
     [hasMessages, hintIndex],
   );
 
-  const composer = (
-    <GlassComposerBar borderRadius={22} contentStyle={styles.composerInner}>
-      <AppleNativeGlassIconButton
-        systemImage="mic.fill"
-        prominent={false}
-        active={isListening}
-        enabled={voiceOk && !sending}
-        onPress={toggleMic}
-        accessibilityLabel={isListening ? 'Stop listening' : 'Speak command'}
-        fallbackIcon={Mic}
-        fallbackIconColor={
-          isListening ? theme.colors.textInverse : theme.colors.textPrimary
-        }
-      />
+  const composerChildren = (
+    <>
       <TextInput
         style={styles.input}
         placeholder={placeholder}
         placeholderTextColor={theme.colors.textMuted}
         value={input}
         onChangeText={setInput}
-        multiline
         maxLength={4000}
         editable={!sending}
         onSubmitEditing={() => void submit(input)}
         blurOnSubmit={false}
         returnKeyType="send"
+        enablesReturnKeyAutomatically
       />
-      <AppleNativeGlassIconButton
-        systemImage="paperplane.fill"
-        prominent
-        enabled={!!input.trim() && !sending}
-        onPress={() => void submit(input)}
-        accessibilityLabel="Send"
-        fallbackIcon={Send}
-        fallbackIconColor={
-          input.trim() && !sending
-            ? theme.colors.textPrimary
-            : theme.colors.textMuted
-        }
-      />
-    </GlassComposerBar>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={isListening ? 'Release to send voice' : 'Hold to speak'}
+        disabled={!voiceAvailable || sending}
+        onPressIn={() => void startListening()}
+        onPressOut={() => void stopListening()}
+        delayLongPress={120}
+        hitSlop={6}
+        style={({pressed}) => [
+          styles.micBtn,
+          pressed && styles.micBtnPressed,
+          isListening && styles.micBtnActive,
+          (!voiceAvailable || sending) && styles.micBtnDisabled,
+        ]}>
+        <Mic
+          size={20}
+          color={
+            isListening
+              ? theme.colors.textInverse ?? '#000'
+              : theme.colors.textPrimary
+          }
+        />
+      </Pressable>
+    </>
   );
+
+  // Flat composer: no surrounding bubble — just a row framed by horizontal
+  // gradient hairlines that fade to transparent on either side. The empty
+  // state shows hairlines above AND below (so the centered row feels framed
+  // in open space); the chat state shows only the top hairline (separator
+  // from the message list above).
+  const renderFlatComposer = (framed: boolean) => (
+    <View style={styles.flatComposer}>
+      <LinearGradient
+        colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.18)', 'rgba(255,255,255,0)']}
+        start={{x: 0, y: 0.5}}
+        end={{x: 1, y: 0.5}}
+        style={styles.flatDivider}
+        pointerEvents="none"
+      />
+      <View style={styles.flatRow}>{composerChildren}</View>
+      {framed ? (
+        <LinearGradient
+          colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.18)', 'rgba(255,255,255,0)']}
+          start={{x: 0, y: 0.5}}
+          end={{x: 1, y: 0.5}}
+          style={styles.flatDivider}
+          pointerEvents="none"
+        />
+      ) : null}
+    </View>
+  );
+
+  const flatComposer = renderFlatComposer(false);
+  const centeredFlatComposer = renderFlatComposer(true);
 
   return (
     <SafeAreaView style={styles.safe} edges={[]}>
@@ -297,16 +356,16 @@ export function AssistantChatScreen() {
 
             <View
               style={[
-                styles.composerPad,
+                styles.flatComposerPad,
                 {paddingBottom: bottomClearance},
               ]}>
-              {composer}
+              {flatComposer}
             </View>
           </>
         ) : (
           <View style={[styles.emptyWrap, {paddingBottom: bottomClearance}]}>
             <View style={styles.emptyCenter}>
-              <View style={styles.emptyComposer}>{composer}</View>
+              <View style={styles.emptyComposer}>{centeredFlatComposer}</View>
             </View>
           </View>
         )}
@@ -358,6 +417,9 @@ const styles = StyleSheet.create({
   bubbleWrapAssistant: {
     alignItems: 'flex-start',
   },
+  cardWrap: {
+    alignSelf: 'stretch',
+  },
   bubble: {
     maxWidth: '88%',
     paddingHorizontal: 14,
@@ -390,22 +452,32 @@ const styles = StyleSheet.create({
     color: theme.colors.textMuted,
     fontSize: theme.typography.fontSize.sm,
   },
-  composerPad: {
-    paddingHorizontal: theme.spacing.md,
+  flatComposerPad: {
+    paddingHorizontal: 0,
   },
-  composerInner: {
-    alignItems: 'flex-end',
-    minHeight: 48,
+  flatComposer: {
+    paddingTop: 8,
+  },
+  flatDivider: {
+    height: StyleSheet.hairlineWidth * 2,
+    marginHorizontal: 0,
+    marginBottom: 6,
+  },
+  flatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: theme.spacing.md,
     paddingVertical: 6,
+    minHeight: 48,
   },
   input: {
     flex: 1,
     minHeight: 40,
-    maxHeight: 120,
     color: theme.colors.textPrimary,
     fontSize: theme.typography.fontSize.md,
     paddingVertical: Platform.OS === 'ios' ? 8 : 4,
-    marginLeft: 8,
+    paddingHorizontal: 4,
   },
   emptyWrap: {
     flex: 1,
@@ -417,5 +489,26 @@ const styles = StyleSheet.create({
   },
   emptyComposer: {
     width: '100%',
+  },
+  micBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  micBtnPressed: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    transform: [{scale: 0.96}],
+  },
+  micBtnActive: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#FFFFFF',
+  },
+  micBtnDisabled: {
+    opacity: 0.4,
   },
 });

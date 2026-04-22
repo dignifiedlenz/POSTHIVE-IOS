@@ -1,4 +1,4 @@
-import React, {useState, useEffect, useCallback, useRef} from 'react';
+import React, {useState, useEffect, useCallback, useMemo, useRef} from 'react';
 import {
   View,
   Text,
@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import {useNavigation, useRoute, RouteProp} from '@react-navigation/native';
 import {StackNavigationProp} from '@react-navigation/stack';
-import {ChevronLeft, Film, MessageCircle, Share2} from 'lucide-react-native';
+import {ChevronLeft, MessageCircle, Share2, Grid3X3, List} from 'lucide-react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {theme} from '../../theme';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
@@ -29,18 +29,49 @@ type NavigationProp = StackNavigationProp<ReviewStackParamList>;
 const {height: SCREEN_HEIGHT} = Dimensions.get('window');
 const HERO_HEIGHT = SCREEN_HEIGHT * 0.4;
 const CARD_HEIGHT = 200;
+const DEFAULT_THUMBNAIL = 'https://www.posthive.app/thumbnail/default.png';
 
 interface DeliverableCardProps {
   deliverable: Deliverable;
   onPress: () => void;
 }
 
+function getDeliverableTypeLabel(type: Deliverable['type']): string {
+  switch (type) {
+    case 'video':
+      return 'VIDEO';
+    case 'audio':
+      return 'AUDIO';
+    case 'image':
+      return 'IMAGE';
+    case 'image_gallery':
+      return 'GALLERY';
+    case 'pdf':
+      return 'PDF';
+    case 'document':
+      return 'DOCUMENT';
+    default:
+      return 'FILE';
+  }
+}
+
+function getSeriesItemThumbnail(deliverable: Deliverable): string | undefined {
+  // Keep non-video items visually consistent with main app series/grid fallback.
+  if (deliverable.type !== 'video') {
+    return DEFAULT_THUMBNAIL;
+  }
+  return deliverable.thumbnail_url || undefined;
+}
+
 function SeriesItemCard({deliverable, onPress}: DeliverableCardProps) {
+  const [thumbnailError, setThumbnailError] = useState(false);
   const hasUnreadComments =
     deliverable.unread_comment_count != null && deliverable.unread_comment_count > 0;
 
   const statusLabel = deliverable.status === 'final' ? 'FINAL' : deliverable.status.toUpperCase();
   const isFinal = deliverable.status === 'final';
+  const thumbnailSource = getSeriesItemThumbnail(deliverable);
+  const hasThumbnail = !!thumbnailSource && !thumbnailError;
 
   return (
     <TouchableOpacity
@@ -48,15 +79,19 @@ function SeriesItemCard({deliverable, onPress}: DeliverableCardProps) {
       onPress={onPress}
       activeOpacity={0.9}>
       {/* Thumbnail */}
-      {deliverable.thumbnail_url ? (
-        <Image
-          source={{uri: deliverable.thumbnail_url}}
-          style={styles.cardThumbnail}
-          resizeMode="cover"
-        />
+      {hasThumbnail ? (
+        <>
+          <Image
+            source={{uri: thumbnailSource}}
+            style={styles.cardThumbnail}
+            resizeMode="cover"
+            onError={() => setThumbnailError(true)}
+          />
+          <View style={styles.thumbnailDarkOverlay} />
+        </>
       ) : (
         <View style={styles.cardPlaceholder}>
-          <Film size={48} color={theme.colors.textMuted} />
+          <Image source={{uri: DEFAULT_THUMBNAIL}} style={styles.placeholderImage} resizeMode="cover" />
         </View>
       )}
       
@@ -97,6 +132,65 @@ function SeriesItemCard({deliverable, onPress}: DeliverableCardProps) {
   );
 }
 
+function SeriesGridItemCard({deliverable, onPress}: DeliverableCardProps) {
+  const [thumbnailError, setThumbnailError] = useState(false);
+  const hasUnreadComments =
+    deliverable.unread_comment_count != null && deliverable.unread_comment_count > 0;
+  const thumbnailSource = getSeriesItemThumbnail(deliverable);
+  const hasThumbnail = !!thumbnailSource && !thumbnailError;
+
+  return (
+    <TouchableOpacity
+      style={styles.gridCard}
+      onPress={onPress}
+      activeOpacity={0.9}>
+      <View style={styles.gridMedia}>
+        {hasThumbnail ? (
+          <>
+            <Image
+              source={{uri: thumbnailSource}}
+              style={styles.gridThumbnail}
+              resizeMode="cover"
+              onError={() => setThumbnailError(true)}
+            />
+            <View style={styles.thumbnailDarkOverlay} />
+          </>
+        ) : (
+          <View style={styles.gridPlaceholder}>
+            <Image source={{uri: DEFAULT_THUMBNAIL}} style={styles.placeholderImage} resizeMode="cover" />
+          </View>
+        )}
+
+        {hasUnreadComments && (
+          <View style={styles.gridUnreadBadge}>
+            <MessageCircle size={10} color={theme.colors.textInverse} />
+            <Text style={styles.gridUnreadCount}>{deliverable.unread_comment_count}</Text>
+          </View>
+        )}
+      </View>
+
+      <LinearGradient
+        colors={['transparent', 'rgba(0,0,0,0.35)', 'rgba(0,0,0,0.9)']}
+        locations={[0, 0.45, 1]}
+        style={styles.gridCardOverlay}
+      />
+      <View style={styles.gridMetaOverlay}>
+        <Text style={styles.gridName} numberOfLines={1}>
+          {deliverable.name}
+        </Text>
+        <Text style={styles.gridType} numberOfLines={1}>
+          {getDeliverableTypeLabel(deliverable.type)}
+        </Text>
+        {deliverable.current_version != null && (
+          <Text style={styles.gridVersionCentered}>
+            {deliverable.current_version === 100 ? 'Final' : `V${deliverable.current_version}`}
+          </Text>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 export function SeriesItemsScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteParams>();
@@ -106,6 +200,7 @@ export function SeriesItemsScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [layoutMode, setLayoutMode] = useState<'grid' | 'list'>('grid');
 
   // Scroll animation for blur effect
   const scrollY = useRef(new Animated.Value(0)).current;
@@ -135,7 +230,7 @@ export function SeriesItemsScreen() {
   }, [loadItems]);
 
   const handleItemPress = (deliverable: Deliverable) => {
-    navigation.navigate('DeliverableReview', {deliverableId: deliverable.id});
+    (navigation as any).navigate('DeliverableReview', {deliverableId: deliverable.id});
   };
 
   const handleShare = useCallback(async () => {
@@ -188,13 +283,21 @@ export function SeriesItemsScreen() {
 
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
-      <Film size={40} color={theme.colors.textMuted} />
+      <Image source={{uri: DEFAULT_THUMBNAIL}} style={styles.emptyThumb} resizeMode="cover" />
       <Text style={styles.emptyTitle}>NO ITEMS</Text>
       <Text style={styles.emptySubtitle}>
         Items in this series will appear here
       </Text>
     </View>
   );
+
+  const gridRows = useMemo(() => {
+    const rows: Deliverable[][] = [];
+    for (let i = 0; i < items.length; i += 2) {
+      rows.push(items.slice(i, i + 2));
+    }
+    return rows;
+  }, [items]);
 
   if (isLoading) {
     return <BrandedLoadingScreen message="Loading series..." />;
@@ -243,7 +346,7 @@ export function SeriesItemsScreen() {
           </>
         ) : (
           <View style={styles.heroNoImage}>
-            <Film size={64} color={theme.colors.textMuted} />
+            <Image source={{uri: DEFAULT_THUMBNAIL}} style={styles.heroDefaultImage} resizeMode="cover" />
           </View>
         )}
         
@@ -319,20 +422,71 @@ export function SeriesItemsScreen() {
         {/* Items section */}
         <View style={styles.itemsSection}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionLabel}>ITEMS</Text>
-            <Text style={styles.itemCount}>{items.length}</Text>
+            <View style={styles.sectionHeaderLeft}>
+              <Text style={styles.sectionLabel}>ITEMS</Text>
+              <Text style={styles.itemCount}>{items.length}</Text>
+            </View>
+            <View style={styles.layoutToggle}>
+              <TouchableOpacity
+                style={[
+                  styles.layoutButton,
+                  layoutMode === 'grid' && styles.layoutButtonActive,
+                ]}
+                onPress={() => setLayoutMode('grid')}>
+                <Grid3X3
+                  size={14}
+                  color={
+                    layoutMode === 'grid'
+                      ? theme.colors.textPrimary
+                      : theme.colors.textMuted
+                  }
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.layoutButton,
+                  layoutMode === 'list' && styles.layoutButtonActive,
+                ]}
+                onPress={() => setLayoutMode('list')}>
+                <List
+                  size={14}
+                  color={
+                    layoutMode === 'list'
+                      ? theme.colors.textPrimary
+                      : theme.colors.textMuted
+                  }
+                />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {items.length > 0 ? (
-            <View style={styles.cardList}>
-              {items.map((item) => (
-                <SeriesItemCard
-                  key={item.id}
-                  deliverable={item}
-                  onPress={() => handleItemPress(item)}
-                />
-              ))}
-            </View>
+            layoutMode === 'grid' ? (
+              <View style={styles.gridRows}>
+                {gridRows.map((row, rowIndex) => (
+                  <View key={`row-${rowIndex}`} style={styles.gridRow}>
+                    {row.map((item) => (
+                      <SeriesGridItemCard
+                        key={item.id}
+                        deliverable={item}
+                        onPress={() => handleItemPress(item)}
+                      />
+                    ))}
+                    {row.length === 1 && <View style={styles.gridCardSpacer} />}
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.cardList}>
+                {items.map((item) => (
+                  <SeriesItemCard
+                    key={item.id}
+                    deliverable={item}
+                    onPress={() => handleItemPress(item)}
+                  />
+                ))}
+              </View>
+            )
           ) : (
             renderEmptyState()
           )}
@@ -375,6 +529,12 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceElevated,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  heroDefaultImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+    opacity: 0.8,
   },
   heroGradient: {
     ...StyleSheet.absoluteFillObject,
@@ -469,6 +629,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.md,
     marginBottom: theme.spacing.md,
   },
+  sectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.sm,
+  },
   sectionLabel: {
     color: theme.colors.textMuted,
     fontSize: 10,
@@ -479,10 +644,118 @@ const styles = StyleSheet.create({
     color: theme.colors.textDisabled,
     fontSize: 11,
   },
+  layoutToggle: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  layoutButton: {
+    width: 32,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  layoutButtonActive: {
+    backgroundColor: theme.colors.surfaceElevated,
+  },
   // Card list
   cardList: {
     paddingHorizontal: theme.spacing.md,
     gap: theme.spacing.md,
+  },
+  gridRows: {
+    paddingHorizontal: theme.spacing.md,
+    gap: theme.spacing.md,
+  },
+  gridRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  gridCard: {
+    flex: 1,
+  },
+  gridCardSpacer: {
+    flex: 1,
+  },
+  gridMedia: {
+    position: 'relative',
+    width: '100%',
+    aspectRatio: 1,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  gridThumbnail: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  gridPlaceholder: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surfaceElevated,
+  },
+  placeholderImage: {
+    width: '100%',
+    height: '100%',
+  },
+  gridCardOverlay: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  gridUnreadBadge: {
+    position: 'absolute',
+    top: theme.spacing.sm,
+    right: theme.spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.textPrimary,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    gap: 3,
+  },
+  gridUnreadCount: {
+    color: theme.colors.textInverse,
+    fontSize: 10,
+    fontFamily: theme.typography.fontFamily.bold,
+  },
+  gridMetaOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.sm,
+  },
+  gridName: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontFamily: theme.typography.fontFamily.bold,
+    fontWeight: '700',
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: {width: 0, height: 1},
+    textShadowRadius: 3,
+  },
+  gridType: {
+    marginTop: 2,
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 10,
+    fontFamily: theme.typography.fontFamily.semibold,
+    letterSpacing: 1,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: {width: 0, height: 1},
+    textShadowRadius: 3,
+  },
+  gridVersionCentered: {
+    marginTop: 4,
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 11,
+    fontFamily: theme.typography.fontFamily.semibold,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: {width: 0, height: 1},
+    textShadowRadius: 3,
   },
   // Card styles (matching ProjectDeliverableCard)
   card: {
@@ -496,6 +769,10 @@ const styles = StyleSheet.create({
   cardThumbnail: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: theme.colors.surface,
+  },
+  thumbnailDarkOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.25)',
   },
   cardPlaceholder: {
     ...StyleSheet.absoluteFillObject,
@@ -547,8 +824,9 @@ const styles = StyleSheet.create({
   },
   cardName: {
     color: theme.colors.textPrimary,
-    fontSize: 18,
-    fontFamily: theme.typography.fontFamily.semibold,
+    fontSize: 20,
+    fontFamily: theme.typography.fontFamily.bold,
+    fontWeight: '700',
     marginBottom: 8,
     textShadowColor: 'rgba(0,0,0,0.5)',
     textShadowOffset: {width: 0, height: 1},
@@ -590,6 +868,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderStyle: 'dashed',
     borderColor: theme.colors.borderHover,
+  },
+  emptyThumb: {
+    width: 64,
+    height: 64,
+    opacity: 0.85,
   },
   emptyTitle: {
     color: theme.colors.textPrimary,

@@ -11,9 +11,15 @@ import {Notification} from '../lib/types';
 interface UseNotificationsOptions {
   workspaceId: string;
   userId: string;
+  /** When false, do not load or subscribe (e.g. workspace editor). */
+  enabled?: boolean;
 }
 
-export function useNotifications({workspaceId, userId}: UseNotificationsOptions) {
+export function useNotifications({
+  workspaceId,
+  userId,
+  enabled = true,
+}: UseNotificationsOptions) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -22,7 +28,11 @@ export function useNotifications({workspaceId, userId}: UseNotificationsOptions)
 
   // Load notifications
   const loadNotifications = useCallback(async () => {
-    if (!workspaceId) return;
+    if (!workspaceId || !enabled) {
+      setNotifications([]);
+      setUnreadCount(0);
+      return;
+    }
 
     try {
       const [notificationData, count] = await Promise.all([
@@ -36,7 +46,7 @@ export function useNotifications({workspaceId, userId}: UseNotificationsOptions)
       console.error('Error loading notifications:', err);
       setError('Failed to load notifications');
     }
-  }, [workspaceId]);
+  }, [workspaceId, enabled]);
 
   // Initial load
   useEffect(() => {
@@ -50,7 +60,7 @@ export function useNotifications({workspaceId, userId}: UseNotificationsOptions)
 
   // Real-time subscription
   useEffect(() => {
-    if (!workspaceId || !userId) return;
+    if (!enabled || !workspaceId || !userId) return;
 
     const channel = supabase
       .channel(`notifications:${userId}`)
@@ -97,7 +107,7 @@ export function useNotifications({workspaceId, userId}: UseNotificationsOptions)
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [workspaceId, userId]);
+  }, [enabled, workspaceId, userId]);
 
   // Refresh
   const refresh = useCallback(async () => {

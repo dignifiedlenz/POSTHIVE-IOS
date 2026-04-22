@@ -109,6 +109,9 @@ export interface Deliverable {
   current_version?: number;
   unread_comment_count?: number;
   comment_count?: number;
+  /** image_gallery: counts from gallery_items + assets (dashboard RPC). */
+  photo_count?: number;
+  video_count?: number;
   latest_version?: Version;
 }
 
@@ -116,19 +119,20 @@ export interface Version {
   id: string;
   deliverable_id: string;
   version_number: number;
+  /** Resolved playback URL for the player (Cloudflare/Bunny HLS when available, otherwise CDN/storage). */
   file_url: string;
   thumbnail_url?: string;
   uploaded_at: string;
   status?: string;
+  /** Storage backend identifier — e.g. 'cloudflare', 'bunny', 'b2', 'r2'. */
+  provider?: string;
+  /** Cloudflare Stream / Bunny Stream HLS manifest URL (raw, before fallbacks). */
+  playback_url?: string;
   // Playback URLs (resolved from asset)
-  bunny_hls_url?: string;
   bunny_cdn_url?: string;
-  bunny_stream_video_id?: string;
-  bunny_thumbnail_url?: string;
   processing_status?: string;
   // Storage URLs for downloads (original files)
   storage_url?: string;
-  r2_url?: string;
 }
 
 // ===== COMMENTS =====
@@ -292,5 +296,27 @@ export interface WorkspaceMember {
   email: string;
   avatar?: string;
   role: string;
+}
+
+// ===== DRIVE =====
+export interface DriveAsset {
+  id: string;
+  name: string;
+  display_name?: string;
+  type: string;
+  file_size?: number | null;
+  mime_type?: string | null;
+  parent_folder_id?: string | null;
+  folder_path?: string | null;
+  folder_color?: string | null;
+  is_folder: boolean;
+  bunny_cdn_url?: string | null;
+  playback_url?: string | null;
+  storage_url?: string | null;
+  storage_path?: string | null;
+  provider?: string | null;
+  uploaded_at?: string;
+  tags?: string[] | null;
+  processing_status?: string | null;
 }
 

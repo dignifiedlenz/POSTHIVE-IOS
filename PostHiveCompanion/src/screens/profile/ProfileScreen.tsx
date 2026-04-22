@@ -13,16 +13,18 @@ import {
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
-import {LogOut, User, Building2, Mail, RefreshCw, Bell, ChevronRight, FileText, HelpCircle, MessageSquare, History} from 'lucide-react-native';
+import {LogOut, User, Building2, Mail, RefreshCw, Bell, ChevronRight, ChevronLeft, FileText, HelpCircle, MessageSquare, History, Trash2} from 'lucide-react-native';
 import {theme} from '../../theme';
 import {useAuth} from '../../hooks/useAuth';
+import {requestAccountDeletion} from '../../lib/api';
 import {WorkspaceDropdownModal} from '../../components/WorkspaceDropdownModal';
 import {useStaggeredAnimation} from '../../hooks/useStaggeredAnimation';
 
 export function ProfileScreen() {
   const navigation = useNavigation();
-  const {user, currentWorkspace, workspaces, signOut, selectWorkspace} = useAuth();
+  const {user, session, currentWorkspace, workspaces, signOut, selectWorkspace} = useAuth();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [showWorkspaceDropdown, setShowWorkspaceDropdown] = useState(false);
   const canSwitchWorkspace = workspaces.length > 1;
 
@@ -39,6 +41,50 @@ export function ProfileScreen() {
     user?.user_metadata?.full_name ||
     user?.email?.split('@')[0] ||
     'User';
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete account',
+      'This permanently deletes your PostHive account. If you are the only member of a workspace you created, deletion may be blocked until you add another member or remove the workspace on the web app.',
+      [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Continue',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Are you sure?',
+              'This cannot be undone. Your account and access will be removed.',
+              [
+                {text: 'Cancel', style: 'cancel'},
+                {
+                  text: 'Delete permanently',
+                  style: 'destructive',
+                  onPress: async () => {
+                    if (!session?.access_token) {
+                      Alert.alert('Error', 'Not signed in.');
+                      return;
+                    }
+                    setIsDeletingAccount(true);
+                    try {
+                      await requestAccountDeletion(session.access_token);
+                      await signOut();
+                      Alert.alert('Account deleted', 'Your account has been removed.');
+                    } catch (e) {
+                      const msg = e instanceof Error ? e.message : 'Deletion failed';
+                      Alert.alert('Could not delete account', msg);
+                    } finally {
+                      setIsDeletingAccount(false);
+                    }
+                  },
+                },
+              ],
+            );
+          },
+        },
+      ],
+    );
+  };
 
   const handleLogout = () => {
     Alert.alert(
@@ -70,6 +116,18 @@ export function ProfileScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      <View style={styles.screenHeader}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+          hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+          accessibilityRole="button"
+          accessibilityLabel="Back">
+          <ChevronLeft size={24} color={theme.colors.textPrimary} />
+        </TouchableOpacity>
+        <Text style={styles.screenHeaderTitle}>ACCOUNT</Text>
+        <View style={styles.headerSpacer} />
+      </View>
       <ScrollView 
         style={styles.content} 
         contentContainerStyle={styles.contentContainer}
@@ -192,7 +250,7 @@ export function ProfileScreen() {
               onPress={() => {
                 const subject = encodeURIComponent('Support Request');
                 const body = encodeURIComponent(`Workspace: ${currentWorkspace?.name || 'N/A'}\n\n`);
-                Linking.openURL(`mailto:support@posthive.app?subject=${subject}&body=${body}`).catch(() => {
+                Linking.openURL(`mailto:lorenz@posthive.app?subject=${subject}&body=${body}`).catch(() => {
                   Alert.alert('Error', 'Unable to open email client');
                 });
               }}
@@ -216,7 +274,7 @@ export function ProfileScreen() {
               onPress={() => {
                 const subject = encodeURIComponent('App Feedback');
                 const body = encodeURIComponent(`App Version: ${Platform.OS === 'ios' ? 'iOS' : 'Android'}\nWorkspace: ${currentWorkspace?.name || 'N/A'}\n\nFeedback:\n`);
-                Linking.openURL(`mailto:feedback@posthive.app?subject=${subject}&body=${body}`).catch(() => {
+                Linking.openURL(`mailto:lorenz@posthive.app?subject=${subject}&body=${body}`).catch(() => {
                   Alert.alert('Error', 'Unable to open email client');
                 });
               }}
@@ -248,9 +306,24 @@ export function ProfileScreen() {
           )}
 
           <TouchableOpacity
+            style={styles.deleteAccountButton}
+            onPress={handleDeleteAccount}
+            disabled={isDeletingAccount || isLoggingOut}
+            activeOpacity={0.8}>
+            {isDeletingAccount ? (
+              <ActivityIndicator size="small" color={theme.colors.error} />
+            ) : (
+              <>
+                <Trash2 size={16} color={theme.colors.error} />
+                <Text style={styles.deleteAccountText}>Delete account</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={styles.logoutButton}
             onPress={handleLogout}
-            disabled={isLoggingOut}
+            disabled={isLoggingOut || isDeletingAccount}
             activeOpacity={0.8}>
             {isLoggingOut ? (
               <ActivityIndicator size="small" color={theme.colors.textSecondary} />
@@ -283,6 +356,31 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: 'transparent', // Show wave background
+  },
+  screenHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  screenHeaderTitle: {
+    fontSize: theme.typography.fontSize.xs,
+    fontWeight: '600',
+    color: theme.colors.textMuted,
+    letterSpacing: theme.typography.letterSpacing.wide,
+  },
+  headerSpacer: {
+    width: 40,
   },
   content: {
     flex: 1,
@@ -405,6 +503,25 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.fontSize.sm,
     fontWeight: '600',
     color: theme.colors.textPrimary,
+    textTransform: 'uppercase',
+    letterSpacing: theme.typography.letterSpacing.wide,
+  },
+  deleteAccountButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: theme.spacing.xs,
+    backgroundColor: 'transparent',
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.md,
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  deleteAccountText: {
+    fontSize: theme.typography.fontSize.sm,
+    fontWeight: '600',
+    color: theme.colors.error,
     textTransform: 'uppercase',
     letterSpacing: theme.typography.letterSpacing.wide,
   },

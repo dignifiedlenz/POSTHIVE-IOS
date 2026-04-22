@@ -45,6 +45,13 @@ export interface TransferWidgetData {
   startedAt: string; // ISO8601 date string
 }
 
+export interface RecentTransferWidgetItem {
+  id: string;
+  fileName: string;
+  isUpload: boolean;
+  completedAt: string; // ISO8601 date string
+}
+
 export type ActivityType = 'upload' | 'comment' | 'approval' | 'revision' | 'share' | 'mention' | 'download';
 
 export interface ActivityWidgetItem {
@@ -152,6 +159,26 @@ class WidgetModuleClass {
       }
     } catch (error) {
       console.warn('WidgetModule: Failed to update transfer', error);
+    }
+  }
+
+  /**
+   * Update recent transfer history shown in transfer widget.
+   */
+  updateRecentTransfers(transfers: RecentTransferWidgetItem[]): void {
+    if (!this.isAvailable) return;
+
+    try {
+      const nativeTransfers = transfers.map(transfer => ({
+        id: transfer.id,
+        fileName: transfer.fileName,
+        isUpload: transfer.isUpload,
+        completedAt: transfer.completedAt,
+      }));
+
+      NativeWidgetModule.updateRecentTransfers(nativeTransfers);
+    } catch (error) {
+      console.warn('WidgetModule: Failed to update recent transfers', error);
     }
   }
 

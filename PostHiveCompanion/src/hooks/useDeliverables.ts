@@ -86,11 +86,17 @@ export function useDeliverableDetail({
     if (!deliverableId) return;
 
     try {
-      const [deliverableData, versionsData, commentsData] = await Promise.all([
+      const [deliverableData, versionsData] = await Promise.all([
         getDeliverable(deliverableId),
         getDeliverableVersions(deliverableId),
-        getDeliverableComments(deliverableId),
       ]);
+      let commentsData: Comment[] = [];
+      try {
+        commentsData = await getDeliverableComments(deliverableId);
+      } catch (commentsError) {
+        // Keep deliverable rendering even if comments fail temporarily.
+        console.error('Error loading comments for deliverable:', commentsError);
+      }
 
       setDeliverable(deliverableData);
       setVersions(versionsData);

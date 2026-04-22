@@ -37,6 +37,9 @@ local.properties
 
 # node.js
 #
+.env
+.env.*
+!.env.example
 node_modules/
 npm-debug.log
 yarn-error.log
@@ -55,6 +58,12 @@ yarn-error.log
 
 # Bundle artifact
 *.jsbundle
+
+# Expo / EAS
+.expo/
+dist/
+web-build/
+expo-env.d.ts
 
 # Ruby / CocoaPods
 **/Pods/

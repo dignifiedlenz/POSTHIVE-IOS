@@ -12,6 +12,7 @@ import {
   getRecentDeliverables,
   getTodos,
   getNotifications,
+  getTransferHistory,
   getUserPreferredWorkspace,
   getUserPrimaryWorkspace,
   getUserWorkspaces,
@@ -75,15 +76,23 @@ export async function syncWidgetDataInBackground(): Promise<boolean> {
       return false;
     }
 
+    const workspacesForRole = await getUserWorkspaces(userId);
+    const currentWs = workspacesForRole.find(w => w.id === workspaceId);
+    const includeNotificationFeed =
+      currentWs?.role !== 'editor';
+
     // Fetch all data in parallel
-    const [deliverables, todos, notifications, eventsRes] = await Promise.all([
+    const [deliverables, todos, notifications, eventsRes, transfers] = await Promise.all([
       getRecentDeliverables(workspaceId, userId),
       getTodos(workspaceId),
-      getNotifications(workspaceId, 50),
+      includeNotificationFeed
+        ? getNotifications(workspaceId, 50)
+        : Promise.resolve([]),
       supabase
         .from('calendar_events')
         .select('*')
         .eq('workspace_id', workspaceId),
+      getTransferHistory(workspaceId, 5),
     ]);
 
     const calendarEvents = (eventsRes.data || []) as CalendarEvent[];
@@ -130,6 +139,18 @@ export async function syncWidgetDataInBackground(): Promise<boolean> {
 
     // No active transfer in background
     WidgetModule.clearActiveTransfer();
+    WidgetModule.updateRecentTransfers(
+      (transfers || []).slice(0, 5).map(transfer => ({
+        id: transfer.id,
+        fileName:
+          transfer.transfer_name ||
+          transfer.project_name ||
+          transfer.operation_type ||
+          'Transfer',
+        isUpload: transfer.operation_type?.toLowerCase().includes('upload') ?? false,
+        completedAt: transfer.completed_at || transfer.started_at,
+      })),
+    );
 
     // Reload widget timelines
     WidgetModule.reloadAllWidgets();

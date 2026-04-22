@@ -60,20 +60,21 @@ const primaryItems: MenuItem[] = [
   },
   {
     label: 'Notifications',
-    action: 'tab',
-    route: 'MainTabs',
-    params: {
-      screen: 'Home',
-      params: {
-        screen: 'Dashboard',
-        params: {openNotifications: true},
-      },
-    },
-    activeRoutes: ['Dashboard', 'Home'],
+    action: 'screen',
+    route: 'Menu',
+    screen: 'Notifications',
+    activeRoutes: ['Notifications'],
   },
 ];
 
 const footerItems: MenuItem[] = [
+  {
+    label: 'Account',
+    action: 'screen',
+    route: 'Menu',
+    screen: 'Profile',
+    activeRoutes: ['Profile'],
+  },
   {
     label: 'Notification Settings',
     action: 'screen',
@@ -93,12 +94,12 @@ const footerItems: MenuItem[] = [
   {
     label: 'Contact Support',
     action: 'link',
-    url: 'mailto:support@posthive.app?subject=Support%20Request',
+    url: 'mailto:lorenz@posthive.app?subject=Support%20Request',
   },
   {
     label: 'Feedback',
     action: 'link',
-    url: 'mailto:feedback@posthive.app?subject=App%20Feedback',
+    url: 'mailto:lorenz@posthive.app?subject=App%20Feedback',
   },
   {
     label: 'Sign Out',

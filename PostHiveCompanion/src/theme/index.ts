@@ -4,6 +4,8 @@
  * Black & white, sharp-edged aesthetic
  */
 
+import {Platform} from 'react-native';
+
 export const theme = {
   colors: {
     // Backgrounds - Pure black base
@@ -100,16 +102,30 @@ export const theme = {
   },
 
   typography: {
-    // Montserrat fonts - use these for headers, labels, and emphasis
+    /**
+     * Match web (`globals.css`): Montserrat for UI; BBH Sans Hegarty only for the POSTHIVE wordmark.
+     * Variable Montserrat files support real `fontWeight` / `fontStyle: 'italic'` on iOS; Android 8+.
+     */
     fontFamily: {
-      regular: 'Montserrat-Regular',
-      medium: 'Montserrat-Medium',
-      semibold: 'Montserrat-SemiBold',
-      bold: 'Montserrat-Bold',
-      // Aliases
-      display: 'Montserrat-SemiBold',
-      heading: 'Montserrat-Bold',
-      label: 'Montserrat-SemiBold',
+      wordmark: 'BBHSansHegarty-Regular',
+      regular: 'Montserrat',
+      medium: 'Montserrat',
+      semibold: 'Montserrat',
+      bold: 'Montserrat',
+      heading: 'Montserrat',
+      label: 'Montserrat',
+      /** @deprecated Prefer `wordmark` for logo text; otherwise same as UI sans. */
+      display: 'Montserrat',
+      /**
+       * Editorial display face. Use for hero greetings / poetic copy where Montserrat
+       * would feel utilitarian. iOS uses the OpenType PostScript name; Android picks
+       * the file basename from `assets/fonts`. Both resolve the same glyphs.
+       */
+      serifItalic: Platform.select({
+        ios: 'MillerBannerExtraCompressed-LightItalic',
+        android: 'MillerBanner-LightItalic',
+        default: 'MillerBannerExtraCompressed-LightItalic',
+      }) as string,
     },
     fontSize: {
       xs: 11, // Labels, metadata

@@ -1,6 +1,14 @@
-import {useState, useEffect, useCallback, createContext, useContext} from 'react';
+import {useState, useEffect, useCallback, createContext, useContext, useRef} from 'react';
+import {Platform} from 'react-native';
 import {User as SupabaseUser, Session} from '@supabase/supabase-js';
-import {supabase, signIn as supabaseSignIn, signOut as supabaseSignOut} from '../lib/supabase';
+import {
+  supabase,
+  signOut as supabaseSignOut,
+  getSignInWithBrowserUrl,
+  createSessionFromUrl,
+} from '../lib/supabase';
+import {isNativeAuthSessionAvailable, startNativeAuthSession} from '../lib/nativeAuthSession';
+import {devLog, devWarn} from '../lib/devLog';
 import {getUserWorkspaces, getUserPreferredWorkspace, getUserPrimaryWorkspace, setUserPreferredWorkspace} from '../lib/api';
 import {Workspace} from '../lib/types';
 import {clearCredentials} from '../lib/secureStorage';
@@ -16,12 +24,16 @@ interface AuthContextValue {
   needsWorkspaceSelection: boolean;
   showWelcome: boolean;
   error: string | null;
-  signIn: (email: string, password: string) => Promise<void>;
+  showAuthWebView: boolean;
+  signInWithBrowser: () => Promise<void>;
+  closeAuthWebView: () => void;
+  refreshAuthState: () => Promise<void>;
   signOut: () => Promise<void>;
   selectWorkspace: (workspace: Workspace) => void;
   switchWorkspace: () => void;
   dismissWelcome: () => void;
   clearError: () => void;
+  setError: (message: string | null) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -35,6 +47,7 @@ export function useAuth() {
 }
 
 export function useAuthState() {
+  const isMountedRef = useRef(true);
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -43,101 +56,193 @@ export function useAuthState() {
   const [isLoading, setIsLoading] = useState(true);
   const [showWelcome, setShowWelcome] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAuthWebView, setShowAuthWebView] = useState(false);
 
   const isAuthenticated = !!user && !!session;
   // Need workspace selection if authenticated but no workspace selected
   const needsWorkspaceSelection = isAuthenticated && !currentWorkspace && workspaces.length > 0;
 
+  const resolveWorkspaceState = useCallback(async (userId: string) => {
+    devLog('[mobile-auth] workspace:resolve:start', {userId});
+    const userWorkspaces = await getUserWorkspaces(userId);
+    devLog('[mobile-auth] workspace:resolve:fetched', {
+      count: userWorkspaces.length,
+      ids: userWorkspaces.map(w => w.id),
+    });
+
+    if (!isMountedRef.current) {
+      return;
+    }
+
+    setWorkspaces(userWorkspaces);
+
+    let selectedWorkspace: Workspace | null = null;
+    let selectedPreferredId: string | null = null;
+
+    if (userWorkspaces.length > 0) {
+      const primaryWorkspace = await getUserPrimaryWorkspace();
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      if (primaryWorkspace) {
+        const primary = userWorkspaces.find(w => w.id === primaryWorkspace.workspace_id);
+        if (primary) {
+          devLog('✅ Using primary workspace:', primary.name);
+          selectedWorkspace = primary;
+          selectedPreferredId = primary.id;
+        }
+      }
+
+      if (!selectedWorkspace) {
+        const preferredId = await getUserPreferredWorkspace(userId);
+        if (!isMountedRef.current) {
+          return;
+        }
+
+        devLog('Preferred workspace ID:', preferredId);
+        const preferredWorkspace = preferredId
+          ? userWorkspaces.find(w => w.id === preferredId)
+          : null;
+
+        if (preferredWorkspace) {
+          devLog('✅ Using preferred workspace:', preferredWorkspace.name);
+          selectedWorkspace = preferredWorkspace;
+          selectedPreferredId = preferredId;
+        }
+      }
+
+      if (!selectedWorkspace && userWorkspaces.length === 1) {
+        devLog('✅ Using first workspace (only one available):', userWorkspaces[0].name);
+        selectedWorkspace = userWorkspaces[0];
+        selectedPreferredId = userWorkspaces[0].id;
+      }
+    }
+
+    setCurrentWorkspace(selectedWorkspace);
+    setPreferredWorkspaceId(selectedPreferredId || selectedWorkspace?.id || null);
+    devLog('[mobile-auth] workspace:resolve:final', {
+      selectedWorkspaceId: selectedWorkspace?.id || null,
+      preferredWorkspaceId: selectedPreferredId || selectedWorkspace?.id || null,
+      needsWorkspaceSelection: userWorkspaces.length > 0 && !selectedWorkspace,
+    });
+  }, []);
+
+  const refreshAuthState = useCallback(async (retryCount = 0) => {
+    if (isMountedRef.current) {
+      setIsLoading(true);
+    }
+
+    try {
+      const {data: {session: existingSession}} = await supabase.auth.getSession();
+      devLog('[mobile-auth] refreshAuthState:getSession', {
+        hasSession: !!existingSession,
+        userId: existingSession?.user?.id || null,
+        retryCount,
+      });
+
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      if (existingSession) {
+        setSession(existingSession);
+        setUser(existingSession.user);
+        await resolveWorkspaceState(existingSession.user.id);
+      } else {
+        // AsyncStorage can be slow to hydrate on cold start (e.g. when not connected to Metro).
+        // Retry once after a short delay to allow storage to be ready.
+        if (retryCount < 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          if (isMountedRef.current) {
+            return refreshAuthState(retryCount + 1);
+          }
+        } else {
+          setSession(null);
+          setUser(null);
+          setWorkspaces([]);
+          setCurrentWorkspace(null);
+          setPreferredWorkspaceId(null);
+        }
+      }
+    } catch (err) {
+      console.error('[mobile-auth] refreshAuthState:error', err);
+      if (isMountedRef.current) {
+        setError('Failed to refresh authentication state.');
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
+    }
+  }, [resolveWorkspaceState]);
+
+  const handleSignedInSession = useCallback(async (newSession: Session) => {
+    devLog('[mobile-auth] handleSignedInSession:start', {
+      userId: newSession.user.id,
+      email: newSession.user.email,
+    });
+
+    if (isMountedRef.current) {
+      setIsLoading(true);
+      setError(null);
+      setShowAuthWebView(false);
+      setCurrentWorkspace(null);
+      setWorkspaces([]);
+      setSession(newSession);
+      setUser(newSession.user);
+    }
+
+    try {
+      await resolveWorkspaceState(newSession.user.id);
+    } catch (workspaceErr) {
+      console.error('Error loading workspaces:', workspaceErr);
+      if (isMountedRef.current) {
+        setError('Signed in, but failed to load your workspaces.');
+      }
+    } finally {
+      if (isMountedRef.current) {
+        devLog('[mobile-auth] handleSignedInSession:done');
+        setIsLoading(false);
+      }
+    }
+  }, [resolveWorkspaceState]);
+
   // Initialize auth state
   useEffect(() => {
-    let isMounted = true;
+    isMountedRef.current = true;
     
     const initializeAuth = async () => {
       try {
-        console.log('Initializing auth...');
-        const {data: {session: existingSession}} = await supabase.auth.getSession();
-        console.log('Got session:', existingSession ? 'yes' : 'no');
-        
-        if (existingSession && isMounted) {
-          setSession(existingSession);
-          setUser(existingSession.user);
-          
-          // Load workspaces
-          try {
-            const userWorkspaces = await getUserWorkspaces(existingSession.user.id);
-            console.log('Loaded workspaces:', userWorkspaces.length);
-            
-            if (isMounted) {
-              setWorkspaces(userWorkspaces);
-              
-              // Auto-select workspace: Primary > Preferred > First workspace
-              if (userWorkspaces.length > 0) {
-                let selectedWorkspace: Workspace | null = null;
-                let selectedPreferredId: string | null = null;
-                
-                // Step 1: Try to get primary workspace first
-                const primaryWorkspace = await getUserPrimaryWorkspace();
-                if (primaryWorkspace) {
-                  const primary = userWorkspaces.find(w => w.id === primaryWorkspace.workspace_id);
-                  if (primary) {
-                    console.log('✅ Using primary workspace:', primary.name);
-                    selectedWorkspace = primary;
-                    selectedPreferredId = primary.id;
-                  }
-                }
-                
-                // Step 2: Try to get preferred workspace (last used) if no primary found
-                if (!selectedWorkspace) {
-                  const preferredId = await getUserPreferredWorkspace(existingSession.user.id);
-                  console.log('Preferred workspace ID:', preferredId);
-                  
-                  const preferredWorkspace = preferredId 
-                    ? userWorkspaces.find(w => w.id === preferredId)
-                    : null;
-                  
-                  if (preferredWorkspace) {
-                    console.log('✅ Using preferred workspace:', preferredWorkspace.name);
-                    selectedWorkspace = preferredWorkspace;
-                    selectedPreferredId = preferredId;
-                  }
-                }
-                
-                // Step 3: Fallback to first workspace if only one exists
-                if (!selectedWorkspace && userWorkspaces.length === 1) {
-                  console.log('✅ Using first workspace (only one available):', userWorkspaces[0].name);
-                  selectedWorkspace = userWorkspaces[0];
-                  selectedPreferredId = userWorkspaces[0].id;
-                }
-                
-                // Set the selected workspace and preferred ID
-                if (selectedWorkspace) {
-                  setCurrentWorkspace(selectedWorkspace);
-                  setPreferredWorkspaceId(selectedPreferredId || selectedWorkspace.id);
-                }
-              }
-            }
-          } catch (workspaceErr) {
-            console.error('Error loading workspaces:', workspaceErr);
-          }
-        }
+        devLog('Initializing auth...');
+        await refreshAuthState();
       } catch (err) {
         console.error('Error initializing auth:', err);
       } finally {
-        if (isMounted) {
-          console.log('Auth initialization complete');
-          setIsLoading(false);
+        if (isMountedRef.current) {
+          devLog('Auth initialization complete');
         }
       }
     };
 
     // Set up auth state change listener
     const {data: {subscription}} = supabase.auth.onAuthStateChange(
-      async (event, newSession) => {
-        console.log('Auth state change:', event);
+      (event, newSession) => {
+        devLog('Auth state change:', event);
         if (event === 'SIGNED_IN' && newSession) {
-          setSession(newSession);
-          setUser(newSession.user);
+          devLog('[mobile-auth] auth-state:SIGNED_IN', {
+            userId: newSession.user.id,
+            email: newSession.user.email,
+            hasAccessToken: !!newSession.access_token,
+            accessTokenLength: newSession.access_token?.length || 0,
+          });
+          // Important: do not await Supabase calls inside onAuthStateChange.
+          // Defer follow-up work so setSession() can fully resolve.
+          setTimeout(() => {
+            void handleSignedInSession(newSession);
+          }, 0);
         } else if (event === 'SIGNED_OUT') {
+          devLog('[mobile-auth] auth-state:SIGNED_OUT');
           setSession(null);
           setUser(null);
           setWorkspaces([]);
@@ -151,79 +256,51 @@ export function useAuthState() {
     
     // Safety timeout - if auth takes more than 10 seconds, stop loading
     const timeout = setTimeout(() => {
-      if (isMounted) {
-        console.warn('Auth initialization timed out');
+      if (isMountedRef.current) {
+        devWarn('Auth initialization timed out');
         setIsLoading(false);
       }
     }, 10000);
     
     // Cleanup
     return () => {
-      isMounted = false;
+      isMountedRef.current = false;
       clearTimeout(timeout);
       subscription.unsubscribe();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [handleSignedInSession, refreshAuthState]);
 
-  const signIn = useCallback(async (email: string, password: string) => {
-    setIsLoading(true);
+  const signInWithBrowser = useCallback(async () => {
     setError(null);
-    
-    try {
-      const {user: signedInUser, session: newSession} = await supabaseSignIn(email, password);
-      setUser(signedInUser);
-      setSession(newSession);
-      
-      // Load workspaces
-      const userWorkspaces = await getUserWorkspaces(signedInUser.id);
-      setWorkspaces(userWorkspaces);
-      
-      // Auto-select workspace: Primary > Preferred > First workspace
-      let autoSelectedWorkspace = false;
-      if (userWorkspaces.length > 0) {
-        // Step 1: Try to get primary workspace first
-        const primaryWorkspace = await getUserPrimaryWorkspace();
-        if (primaryWorkspace) {
-          const primary = userWorkspaces.find(w => w.id === primaryWorkspace.workspace_id);
-          if (primary) {
-            console.log('✅ Using primary workspace:', primary.name);
-            setCurrentWorkspace(primary);
-            setPreferredWorkspaceId(primary.id);
-            autoSelectedWorkspace = true;
-          }
+
+    if (Platform.OS === 'ios' && isNativeAuthSessionAvailable()) {
+      setIsLoading(true);
+      try {
+        const authUrl = getSignInWithBrowserUrl();
+        const callbackUrl = await startNativeAuthSession(authUrl);
+        const result = await createSessionFromUrl(callbackUrl);
+        if (!result) {
+          setError('Invalid auth response');
+          return;
         }
-        
-        // Step 2: Try preferred workspace if no primary found
-        if (!autoSelectedWorkspace) {
-          const preferredId = await getUserPreferredWorkspace(signedInUser.id);
-          setPreferredWorkspaceId(preferredId);
-          const preferredWorkspace = preferredId 
-            ? userWorkspaces.find(w => w.id === preferredId)
-            : null;
-          
-          if (preferredWorkspace) {
-            console.log('✅ Using preferred workspace:', preferredWorkspace.name);
-            setCurrentWorkspace(preferredWorkspace);
-            autoSelectedWorkspace = true;
-          } else if (userWorkspaces.length === 1) {
-            // Step 3: Fallback to first workspace if only one exists
-            console.log('✅ Using first workspace (only one available):', userWorkspaces[0].name);
-            setCurrentWorkspace(userWorkspaces[0]);
-            setPreferredWorkspaceId(userWorkspaces[0].id);
-            autoSelectedWorkspace = true;
-          }
+        await refreshAuthState();
+      } catch (err: unknown) {
+        const e = err as {code?: string; message?: string};
+        if (e?.code === 'E_CANCELLED') {
+          return;
         }
+        setError(typeof e?.message === 'string' ? e.message : 'Sign-in failed');
+      } finally {
+        setIsLoading(false);
       }
-      
-      // Welcome screen removed - go straight to app
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Sign in failed';
-      setError(message);
-      throw err;
-    } finally {
-      setIsLoading(false);
+      return;
     }
+
+    setShowAuthWebView(true);
+  }, [refreshAuthState]);
+
+  const closeAuthWebView = useCallback(() => {
+    setShowAuthWebView(false);
   }, []);
 
   const selectWorkspace = useCallback((workspace: Workspace) => {
@@ -284,12 +361,16 @@ export function useAuthState() {
     needsWorkspaceSelection,
     showWelcome,
     error,
-    signIn,
+    showAuthWebView,
+    signInWithBrowser,
+    closeAuthWebView,
+    refreshAuthState,
     signOut,
     selectWorkspace,
     switchWorkspace,
     dismissWelcome,
     clearError,
+    setError,
   };
 }
 

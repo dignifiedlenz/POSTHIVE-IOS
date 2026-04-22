@@ -6,6 +6,7 @@ import {
   FlatList,
   TextInput,
   TouchableOpacity,
+  Pressable,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
@@ -13,14 +14,13 @@ import {
   Modal,
   ScrollView,
   Share as RNShare,
-  Switch,
   Animated,
   Dimensions,
 } from 'react-native';
 import {Comment} from '../../lib/types';
 import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
 import {useNavigation, useRoute, RouteProp, useFocusEffect} from '@react-navigation/native';
-import {Send, Clock, Share, Copy, Lock, X, Check, Download, CheckCircle, Circle, FileVideo, FileImage} from 'lucide-react-native';
+import {Share, Copy, Lock, X, Check, Download, CheckCircle, Circle, FileVideo, FileImage, ChevronLeft, ChevronRight} from 'lucide-react-native';
 import {theme} from '../../theme';
 import {useAuth} from '../../hooks/useAuth';
 import {useDeliverableDetail} from '../../hooks/useDeliverables';
@@ -29,8 +29,8 @@ import {
   AudioPlayerWithWaveform,
   AudioPlayerWithWaveformRef,
 } from '../../components/AudioPlayerWithWaveform';
+import {Swipeable} from 'react-native-gesture-handler';
 import {CommentItem} from '../../components/CommentItem';
-import {ReviewStackParamList} from '../../app/App';
 import {formatVideoTimestamp} from '../../lib/utils';
 import {createClientReviewShareLink, getDeliverableGalleryImages, markDeliverableCommentsAsRead, markDeliverableAsFinal, unmarkDeliverableAsFinal} from '../../lib/api';
 import {CameraRoll} from '@react-native-camera-roll/camera-roll';
@@ -38,6 +38,9 @@ import ReactNativeBlobUtil from 'react-native-blob-util';
 import {PhotoGallery, Photo, PhotoGrid} from '../../components/PhotoGallery';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useTabBar} from '../../contexts/TabBarContext';
+import {CommentComposerGlassRow} from '../../components/CommentComposerGlassRow';
+import {FlatCommentComposer} from '../../components/FlatCommentComposer';
+import {AppleNativeGlassSwitch} from '../../components/native/AppleNativeGlassSwitch';
 
 // Supported file extensions for Camera Roll
 const SUPPORTED_VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'mp4v', '3gp'];
@@ -69,7 +72,12 @@ function isSupportedForCameraRoll(url: string, deliverableType: string): {suppor
   return {supported: false, mediaType: 'video'};
 }
 
-type RouteParams = RouteProp<ReviewStackParamList, 'DeliverableReview'>;
+type DeliverableReviewRouteParams = {
+  deliverableId: string;
+  versionId?: string;
+  commentId?: string;
+};
+type RouteParams = RouteProp<{DeliverableReview: DeliverableReviewRouteParams}, 'DeliverableReview'>;
 
 export function DeliverableReviewScreen() {
   const navigation = useNavigation();
@@ -110,9 +118,25 @@ export function DeliverableReviewScreen() {
   // Comment popup (from video overlay trigger)
   const [showCommentPopup, setShowCommentPopup] = useState(false);
   
-  // Tab bar visibility control
   const {showTabBar, hideTabBar} = useTabBar();
   const insets = useSafeAreaInsets();
+
+  // DeliverableReview is now a root-level stack screen (above the tab navigator), so the
+  // native iOS tab bar is automatically out of the way — no setOptions hacks needed. We still
+  // call hideTabBar() below to fade the floating create FAB while reviewing.
+  const swipeableRef = useRef<Swipeable>(null);
+  const commentBarFocusAnim = useRef(new Animated.Value(1)).current;
+  const runCommentBarFocus = useCallback(
+    (focused: boolean) => {
+      Animated.spring(commentBarFocusAnim, {
+        toValue: focused ? 1.022 : 1,
+        useNativeDriver: true,
+        friction: 7,
+        tension: 140,
+      }).start();
+    },
+    [commentBarFocusAnim],
+  );
 
   // Handle video fullscreen changes - just track state, tab bar stays hidden on this screen
   const handleFullscreenChange = useCallback((fullscreen: boolean) => {
@@ -373,29 +397,31 @@ export function DeliverableReviewScreen() {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const downloadProgressAnim = useRef(new Animated.Value(0)).current;
   const successScaleAnim = useRef(new Animated.Value(0)).current;
+  const downloadFetchTaskRef = useRef<{cancel: (cb?: (reason?: string) => void) => void} | null>(null);
 
-  // Get downloadable URL - prefer storage URLs (actual files) over streaming URLs
+  // Get downloadable URL - prefer storage URLs (actual files) over streaming URLs.
+  // Cloudflare Stream playback URLs (videodelivery.net) and HLS manifests are not directly
+  // downloadable, so we explicitly skip them here.
   const getDownloadableUrl = useCallback(() => {
-    // Priority: storage_url (B2) > r2_url (Cloudflare R2) > bunny_cdn_url > file_url
-    // storage_url and r2_url are the actual video files
-    // bunny_cdn_url and file_url might be HLS streaming URLs
-    
-    // First try storage URLs (these are the actual files)
-    if (currentVersion?.storage_url) {
+    const isStreamingUrl = (url?: string | null) =>
+      !!url && (
+        url.includes('.m3u8') ||
+        url.includes('/playlist') ||
+        url.includes('videodelivery.net') ||
+        url.includes('cloudflarestream.com')
+      );
+
+    if (currentVersion?.storage_url && !isStreamingUrl(currentVersion.storage_url)) {
       return currentVersion.storage_url;
     }
-    if (currentVersion?.r2_url) {
-      return currentVersion.r2_url;
-    }
-    
-    // Fall back to CDN/file URLs only if they're not HLS
+
     const fallbackUrl = currentVersion?.bunny_cdn_url || currentVersion?.file_url;
-    if (fallbackUrl && !fallbackUrl.includes('.m3u8') && !fallbackUrl.includes('playlist')) {
+    if (fallbackUrl && !isStreamingUrl(fallbackUrl)) {
       return fallbackUrl;
     }
-    
+
     return null;
-  }, [currentVersion?.storage_url, currentVersion?.r2_url, currentVersion?.bunny_cdn_url, currentVersion?.file_url]);
+  }, [currentVersion?.storage_url, currentVersion?.bunny_cdn_url, currentVersion?.file_url]);
 
   // Fetch file size when version changes
   useEffect(() => {
@@ -482,6 +508,14 @@ export function DeliverableReviewScreen() {
     ]).start();
   }, [downloadProgressAnim, successScaleAnim]);
 
+  const cancelActiveDownloadFetch = useCallback(() => {
+    const task = downloadFetchTaskRef.current;
+    downloadFetchTaskRef.current = null;
+    if (task && typeof task.cancel === 'function') {
+      task.cancel();
+    }
+  }, []);
+
   // Download functionality
   const handleDownload = useCallback(async () => {
     const downloadableUrl = getDownloadableUrl();
@@ -521,8 +555,7 @@ export function DeliverableReviewScreen() {
       const fileName = `PostHive_${sanitizedName}_${versionNumber}.${extension}`;
       tempFilePath = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/${fileName}`;
       
-      // Download with progress tracking
-      const response = await ReactNativeBlobUtil.config({
+      const fetchTask = ReactNativeBlobUtil.config({
         fileCache: true,
         path: tempFilePath,
         followRedirect: true,
@@ -540,6 +573,14 @@ export function DeliverableReviewScreen() {
             useNativeDriver: false,
           }).start();
         });
+
+      downloadFetchTaskRef.current = fetchTask;
+      let response;
+      try {
+        response = await fetchTask;
+      } finally {
+        downloadFetchTaskRef.current = null;
+      }
       
       const status = response.info().status;
       
@@ -601,10 +642,10 @@ export function DeliverableReviewScreen() {
       }, 5000);
     } catch (error) {
       console.error('Download error:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to download file';
-      
-      if (errorMessage.includes('cancelled') || errorMessage.includes('canceled')) {
-        // User cancelled - just close modal
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isCanceled = /cancel|canceled|cancelled/i.test(errorMessage);
+
+      if (isCanceled) {
         resetDownloadModal();
       } else {
         setDownloadStatus('error');
@@ -622,7 +663,15 @@ export function DeliverableReviewScreen() {
     } finally {
       setIsDownloading(false);
     }
-  }, [currentVersion, deliverable, isDownloading, getDownloadableUrl, resetDownloadModal, animateSuccess, downloadProgressAnim]);
+  }, [
+    currentVersion,
+    deliverable,
+    isDownloading,
+    getDownloadableUrl,
+    resetDownloadModal,
+    animateSuccess,
+    downloadProgressAnim,
+  ]);
 
   // Finalization functionality
   const isFinalVersion = currentVersion?.version_number === 100 || deliverable?.current_version === 100;
@@ -699,6 +748,28 @@ export function DeliverableReviewScreen() {
     );
   }, [deliverable, isFinalizing, refreshDeliverable]);
 
+  const selectableVersionNumbers = versions
+    .map(v => v.version_number)
+    .sort((a, b) => a - b);
+  const selectedVersionIndex = selectableVersionNumbers.findIndex(
+    v => v === selectedVersion,
+  );
+
+  const handleSelectPreviousVersion = useCallback(() => {
+    if (selectedVersionIndex <= 0) return;
+    setSelectedVersion(selectableVersionNumbers[selectedVersionIndex - 1]);
+  }, [selectedVersionIndex, selectableVersionNumbers, setSelectedVersion]);
+
+  const handleSelectNextVersion = useCallback(() => {
+    if (
+      selectedVersionIndex < 0 ||
+      selectedVersionIndex >= selectableVersionNumbers.length - 1
+    ) {
+      return;
+    }
+    setSelectedVersion(selectableVersionNumbers[selectedVersionIndex + 1]);
+  }, [selectedVersionIndex, selectableVersionNumbers, setSelectedVersion]);
+
   // Scroll to and highlight the target comment when loading completes
   useEffect(() => {
     if (!isLoading && commentId && comments.length > 0) {
@@ -748,6 +819,19 @@ export function DeliverableReviewScreen() {
   const videoUrl = currentVersion?.file_url || '';
   const isImageGallery = deliverable?.type === 'image_gallery';
 
+  if (__DEV__ && currentVersion && deliverable?.type !== 'image_gallery') {
+    console.log('[DeliverableReview] resolved playback', {
+      deliverableId,
+      version: currentVersion.version_number,
+      provider: (currentVersion as any).provider,
+      processing_status: (currentVersion as any).processing_status,
+      resolved_file_url: videoUrl,
+      playback_url: (currentVersion as any).playback_url,
+      bunny_cdn_url: (currentVersion as any).bunny_cdn_url,
+      storage_url: (currentVersion as any).storage_url,
+    });
+  }
+
   // Create comment markers for the video timeline
   const commentMarkers = comments
     .filter(c => c.start_time != null)
@@ -767,12 +851,69 @@ export function DeliverableReviewScreen() {
     );
   }
 
+  const renderSwipeActions = () => (
+    <View style={swipeActionsStyles.container}>
+      <TouchableOpacity
+        style={[swipeActionsStyles.action, swipeActionsStyles.download]}
+        onPress={() => {
+          swipeableRef.current?.close();
+          handleDownload();
+        }}
+        disabled={isDownloading || !currentVersion?.file_url}>
+        <Download size={22} color="#fff" />
+        <Text style={swipeActionsStyles.actionText}>{getDownloadButtonText()}</Text>
+      </TouchableOpacity>
+      {!isFinalVersion ? (
+        <TouchableOpacity
+          style={[swipeActionsStyles.action, swipeActionsStyles.finalize]}
+          onPress={() => {
+            swipeableRef.current?.close();
+            handleFinalize();
+          }}
+          disabled={isFinalizing || !currentVersion}>
+          <CheckCircle size={22} color="#fff" />
+          <Text style={swipeActionsStyles.actionText}>
+            {isFinalizing ? '...' : 'Final'}
+          </Text>
+        </TouchableOpacity>
+      ) : (
+        <TouchableOpacity
+          style={[swipeActionsStyles.action, swipeActionsStyles.unfinalize]}
+          onPress={() => {
+            swipeableRef.current?.close();
+            handleUnfinalize();
+          }}
+          disabled={isFinalizing}>
+          <Circle size={22} color="#fff" />
+          <Text style={swipeActionsStyles.actionText}>Revert</Text>
+        </TouchableOpacity>
+      )}
+      <TouchableOpacity
+        style={[swipeActionsStyles.action, swipeActionsStyles.share]}
+        onPress={() => {
+          swipeableRef.current?.close();
+          setShowShareModal(true);
+        }}>
+        <Share size={22} color="#fff" />
+        <Text style={swipeActionsStyles.actionText}>Share</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <KeyboardAvoidingView
+      <Swipeable
+        ref={swipeableRef}
+        renderRightActions={renderSwipeActions}
+        rightThreshold={60}
+        friction={2}
+        overshootRight={false}
+        containerStyle={styles.swipeableContainer}
+        childrenContainerStyle={styles.swipeableChildren}>
+        <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}>
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 36 : 0}>
         {/* Image Gallery or Video Player - at the top */}
         {isImageGallery ? (
           <View style={styles.galleryContainer}>
@@ -830,47 +971,25 @@ export function DeliverableReviewScreen() {
                         activeOpacity={1}
                         onPress={e => e.stopPropagation()}
                         style={[styles.commentPopupContent, {paddingHorizontal: Math.max(insets.left, insets.right, theme.spacing.md), paddingBottom: Math.max(insets.bottom, theme.spacing.sm)}]}>
-                        <View style={styles.commentPopupInputRow}>
-                          <TouchableOpacity
-                            style={styles.timestampButton}
-                            onPress={addTimestamp}>
-                            <Clock size={14} color="rgba(255, 255, 255, 0.7)" />
-                            <Text style={styles.timestampButtonText}>
-                              {formatVideoTimestamp(currentVideoTime)}
-                            </Text>
-                          </TouchableOpacity>
-                          <TextInput
-                            style={styles.commentPopupInput}
-                            placeholder="Leave feedback..."
-                            placeholderTextColor={theme.colors.textMuted}
-                            value={commentText}
+                        <Animated.View style={{transform: [{scale: commentBarFocusAnim}]}}>
+                          <CommentComposerGlassRow
+                            commentText={commentText}
                             onChangeText={setCommentText}
-                            multiline
-                            maxLength={1000}
-                            autoFocus
-                            autoCorrect={false}
-                            autoCapitalize="none"
-                          />
-                          <TouchableOpacity
-                            style={[
-                              styles.sendButton,
-                              (!commentText.trim() || isSubmitting) && styles.sendButtonDisabled,
-                            ]}
-                            onPress={async () => {
+                            currentVideoTime={currentVideoTime}
+                            onTimestampPress={addTimestamp}
+                            onSubmit={async () => {
                               await handleSubmitComment();
                               setShowCommentPopup(false);
                             }}
-                            disabled={!commentText.trim() || isSubmitting}>
-                            {isSubmitting ? (
-                              <ActivityIndicator size="small" color={theme.colors.textPrimary} />
-                            ) : (
-                              <Send
-                                size={18}
-                                color={commentText.trim() ? theme.colors.textPrimary : theme.colors.textMuted}
-                              />
-                            )}
-                          </TouchableOpacity>
-                        </View>
+                            isSubmitting={isSubmitting}
+                            inputStyle={styles.commentPopupInput}
+                            borderRadius={20}
+                            autoFocus
+                            textInputProps={{autoCapitalize: 'none'}}
+                            onInputFocus={() => runCommentBarFocus(true)}
+                            onInputBlur={() => runCommentBarFocus(false)}
+                          />
+                        </Animated.View>
                       </TouchableOpacity>
                     </KeyboardAvoidingView>
                   </TouchableOpacity>
@@ -908,47 +1027,25 @@ export function DeliverableReviewScreen() {
                         activeOpacity={1}
                         onPress={e => e.stopPropagation()}
                         style={[styles.commentPopupContent, {paddingHorizontal: Math.max(insets.left, insets.right, theme.spacing.md), paddingBottom: Math.max(insets.bottom, theme.spacing.sm)}]}>
-                        <View style={styles.commentPopupInputRow}>
-                          <TouchableOpacity
-                            style={styles.timestampButton}
-                            onPress={addTimestamp}>
-                            <Clock size={14} color="rgba(255, 255, 255, 0.7)" />
-                            <Text style={styles.timestampButtonText}>
-                              {formatVideoTimestamp(currentVideoTime)}
-                            </Text>
-                          </TouchableOpacity>
-                          <TextInput
-                            style={styles.commentPopupInput}
-                            placeholder="Leave feedback..."
-                            placeholderTextColor={theme.colors.textMuted}
-                            value={commentText}
+                        <Animated.View style={{transform: [{scale: commentBarFocusAnim}]}}>
+                          <CommentComposerGlassRow
+                            commentText={commentText}
                             onChangeText={setCommentText}
-                            multiline
-                            maxLength={1000}
-                            autoFocus
-                            autoCorrect={false}
-                            autoCapitalize="none"
-                          />
-                          <TouchableOpacity
-                            style={[
-                              styles.sendButton,
-                              (!commentText.trim() || isSubmitting) && styles.sendButtonDisabled,
-                            ]}
-                            onPress={async () => {
+                            currentVideoTime={currentVideoTime}
+                            onTimestampPress={addTimestamp}
+                            onSubmit={async () => {
                               await handleSubmitComment();
                               setShowCommentPopup(false);
                             }}
-                            disabled={!commentText.trim() || isSubmitting}>
-                            {isSubmitting ? (
-                              <ActivityIndicator size="small" color={theme.colors.textPrimary} />
-                            ) : (
-                              <Send
-                                size={18}
-                                color={commentText.trim() ? theme.colors.textPrimary : theme.colors.textMuted}
-                              />
-                            )}
-                          </TouchableOpacity>
-                        </View>
+                            isSubmitting={isSubmitting}
+                            inputStyle={styles.commentPopupInput}
+                            borderRadius={20}
+                            autoFocus
+                            textInputProps={{autoCapitalize: 'none'}}
+                            onInputFocus={() => runCommentBarFocus(true)}
+                            onInputBlur={() => runCommentBarFocus(false)}
+                          />
+                        </Animated.View>
                       </TouchableOpacity>
                     </KeyboardAvoidingView>
                   </TouchableOpacity>
@@ -962,59 +1059,86 @@ export function DeliverableReviewScreen() {
         {/* Version Selector */}
         {!isImageGallery && versions.length >= 1 && (
           <View style={styles.versionSelector}>
-            {[...versions]
-              .filter(v => v.version_number < 100) // Show regular versions
-              .sort((a, b) => a.version_number - b.version_number)
-              .map(v => {
-                const label = `V${v.version_number}`;
-                return (
-                  <TouchableOpacity
-                    key={v.id}
-                    style={[
-                      styles.versionButton,
-                      selectedVersion === v.version_number &&
-                        styles.versionButtonActive,
-                    ]}
-                    onPress={() => setSelectedVersion(v.version_number)}>
-                    <Text
+            <TouchableOpacity
+              style={[
+                styles.versionNavButton,
+                selectedVersionIndex <= 0 && styles.versionNavButtonDisabled,
+              ]}
+              onPress={handleSelectPreviousVersion}
+              disabled={selectedVersionIndex <= 0}>
+              <ChevronLeft
+                size={16}
+                color={
+                  selectedVersionIndex <= 0
+                    ? theme.colors.textMuted
+                    : theme.colors.textPrimary
+                }
+              />
+            </TouchableOpacity>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.versionScrollContent}>
+              {[...versions]
+                .filter(v => v.version_number < 100)
+                .sort((a, b) => a.version_number - b.version_number)
+                .map(v => {
+                  const label = `V${v.version_number}`;
+                  return (
+                    <TouchableOpacity
+                      key={v.id}
                       style={[
-                        styles.versionText,
+                        styles.versionButton,
                         selectedVersion === v.version_number &&
-                          styles.versionTextActive,
-                      ]}>
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            
-            {/* Final Version Button - either select existing or create new */}
-            {(() => {
-              const hasFinalVersion = versions.some(v => v.version_number === 100);
-              
-              if (hasFinalVersion) {
-                // Show selectable Final tab
-                return (
-                  <TouchableOpacity
-                    style={[
-                      styles.versionButton,
-                      styles.versionButtonFinal,
-                      selectedVersion === 100 && styles.versionButtonActive,
-                    ]}
-                    onPress={() => setSelectedVersion(100)}>
-                    <CheckCircle size={12} color={selectedVersion === 100 ? theme.colors.textPrimary : theme.colors.success} style={{marginRight: 4}} />
-                    <Text
+                          styles.versionButtonActive,
+                      ]}
+                      onPress={() => setSelectedVersion(v.version_number)}>
+                      <Text
+                        style={[
+                          styles.versionText,
+                          selectedVersion === v.version_number &&
+                            styles.versionTextActive,
+                        ]}>
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+
+              {(() => {
+                const hasFinalVersion = versions.some(v => v.version_number === 100);
+
+                if (hasFinalVersion) {
+                  return (
+                    <TouchableOpacity
                       style={[
-                        styles.versionText,
-                        styles.versionTextFinal,
-                        selectedVersion === 100 && styles.versionTextActive,
-                      ]}>
-                      Final
-                    </Text>
-                  </TouchableOpacity>
-                );
-              } else {
-                // Show "Mark Final" button to create final version
+                        styles.versionButton,
+                        styles.versionButtonFinal,
+                        selectedVersion === 100 && styles.versionButtonActive,
+                      ]}
+                      onPress={() => setSelectedVersion(100)}>
+                      <CheckCircle
+                        size={12}
+                        color={
+                          selectedVersion === 100
+                            ? theme.colors.textPrimary
+                            : theme.colors.success
+                        }
+                        style={{marginRight: 4}}
+                      />
+                      <Text
+                        style={[
+                          styles.versionText,
+                          styles.versionTextFinal,
+                          selectedVersion === 100 && styles.versionTextActive,
+                        ]}>
+                        Final
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                }
+
                 return (
                   <TouchableOpacity
                     style={[
@@ -1027,7 +1151,11 @@ export function DeliverableReviewScreen() {
                       <ActivityIndicator size="small" color={theme.colors.success} />
                     ) : (
                       <>
-                        <Circle size={12} color={theme.colors.textMuted} style={{marginRight: 4}} />
+                        <Circle
+                          size={12}
+                          color={theme.colors.textMuted}
+                          style={{marginRight: 4}}
+                        />
                         <Text style={[styles.versionText, styles.versionTextMarkFinal]}>
                           Final
                         </Text>
@@ -1035,8 +1163,30 @@ export function DeliverableReviewScreen() {
                     )}
                   </TouchableOpacity>
                 );
-              }
-            })()}
+              })()}
+            </ScrollView>
+
+            <TouchableOpacity
+              style={[
+                styles.versionNavButton,
+                (selectedVersionIndex < 0 ||
+                  selectedVersionIndex >= selectableVersionNumbers.length - 1) &&
+                  styles.versionNavButtonDisabled,
+              ]}
+              onPress={handleSelectNextVersion}
+              disabled={
+                selectedVersionIndex < 0 ||
+                selectedVersionIndex >= selectableVersionNumbers.length - 1
+              }>
+              <ChevronRight
+                size={16}
+                color={
+                  selectedVersionIndex >= selectableVersionNumbers.length - 1
+                    ? theme.colors.textMuted
+                    : theme.colors.textPrimary
+                }
+              />
+            </TouchableOpacity>
           </View>
         )}
 
@@ -1079,115 +1229,148 @@ export function DeliverableReviewScreen() {
           />
         )}
 
-        {/* Comment Input */}
+        {/* Comment Input — flat variant, mirrors AssistantChatScreen styling. */}
         {!isImageGallery && (
-          <View style={styles.commentInputContainer}>
-            <TouchableOpacity
-              style={styles.timestampButton}
-              onPress={addTimestamp}>
-              <Clock size={14} color="rgba(255, 255, 255, 0.7)" />
-              <Text style={styles.timestampButtonText}>
-                {formatVideoTimestamp(currentVideoTime)}
-              </Text>
-            </TouchableOpacity>
-            <TextInput
-              style={styles.commentInput}
-              placeholder="Leave feedback..."
-              placeholderTextColor={theme.colors.textMuted}
-              value={commentText}
-              onChangeText={setCommentText}
-              multiline
-              maxLength={1000}
-            />
-            <TouchableOpacity
-              style={[
-                styles.sendButton,
-                (!commentText.trim() || isSubmitting) && styles.sendButtonDisabled,
-              ]}
-              onPress={handleSubmitComment}
-              disabled={!commentText.trim() || isSubmitting}>
-              {isSubmitting ? (
-                <ActivityIndicator size="small" color={theme.colors.textPrimary} />
-              ) : (
-                <Send 
-                  size={18} 
-                  color={commentText.trim() ? theme.colors.textPrimary : theme.colors.textMuted} 
-                />
-              )}
-            </TouchableOpacity>
-          </View>
+          <Animated.View style={{transform: [{scale: commentBarFocusAnim}]}}>
+            <View style={styles.commentInputOuter}>
+              <FlatCommentComposer
+                commentText={commentText}
+                onChangeText={setCommentText}
+                currentVideoTime={currentVideoTime}
+                onTimestampPress={addTimestamp}
+                onSubmit={handleSubmitComment}
+                isSubmitting={isSubmitting}
+                onInputFocus={() => runCommentBarFocus(true)}
+                onInputBlur={() => runCommentBarFocus(false)}
+              />
+            </View>
+          </Animated.View>
         )}
 
-        {/* Action Menu */}
+        {/* Action Menu — PostHive sheet: sharp panel, uppercase header, icon wells */}
         <Modal
           visible={showActionMenu}
           transparent
           animationType="fade"
           onRequestClose={() => setShowActionMenu(false)}>
-          <TouchableOpacity
-            style={styles.actionMenuOverlay}
-            activeOpacity={1}
-            onPress={() => setShowActionMenu(false)}>
-            <View style={styles.actionMenuContainer}>
-              <TouchableOpacity
-                style={styles.actionMenuItem}
-                onPress={() => {
-                  setShowActionMenu(false);
-                  handleDownload();
-                }}
-                disabled={isDownloading || !currentVersion?.file_url}>
-                <Download size={20} color={theme.colors.textPrimary} />
-                <Text style={styles.actionMenuText}>
-                  {getDownloadButtonText()}
-                </Text>
-              </TouchableOpacity>
-              <View style={styles.actionMenuDivider} />
-              {/* Mark as Final / Remove Final */}
-              {!isFinalVersion ? (
+          <View style={styles.actionMenuOverlay}>
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss menu"
+              onPress={() => setShowActionMenu(false)}
+            />
+            <View
+              style={[
+                styles.actionMenuSheet,
+                {paddingBottom: Math.max(insets.bottom, theme.spacing.md)},
+              ]}>
+              <View style={styles.actionMenuContainer}>
+                <View style={styles.actionMenuGrabber} />
+                <View style={styles.actionMenuHeader}>
+                  <Text style={styles.actionMenuHeaderEyebrow}>PostHive</Text>
+                  <Text style={styles.actionMenuHeaderTitle}>Actions</Text>
+                </View>
+                <View style={styles.actionMenuDividerStrong} />
+                <TouchableOpacity
+                  style={[
+                    styles.actionMenuItem,
+                    (isDownloading || !currentVersion?.file_url) && styles.actionMenuItemDisabled,
+                  ]}
+                  onPress={() => {
+                    setShowActionMenu(false);
+                    handleDownload();
+                  }}
+                  disabled={isDownloading || !currentVersion?.file_url}
+                  activeOpacity={0.75}>
+                  <View style={styles.actionMenuIconWell}>
+                    <Download
+                      size={18}
+                      color={
+                        isDownloading || !currentVersion?.file_url
+                          ? theme.colors.textMuted
+                          : theme.colors.textPrimary
+                      }
+                      strokeWidth={2}
+                    />
+                  </View>
+                  <View style={styles.actionMenuItemTextBlock}>
+                    <Text
+                      style={[
+                        styles.actionMenuText,
+                        (isDownloading || !currentVersion?.file_url) && styles.actionMenuTextMuted,
+                      ]}>
+                      {getDownloadButtonText()}
+                    </Text>
+                    <Text style={styles.actionMenuHint}>Save this version to your device</Text>
+                  </View>
+                </TouchableOpacity>
+                <View style={styles.actionMenuDivider} />
+                {!isFinalVersion ? (
+                  <TouchableOpacity
+                    style={[styles.actionMenuItem, (isFinalizing || !currentVersion) && styles.actionMenuItemDisabled]}
+                    onPress={() => {
+                      setShowActionMenu(false);
+                      handleFinalize();
+                    }}
+                    disabled={isFinalizing || !currentVersion}
+                    activeOpacity={0.75}>
+                    <View style={[styles.actionMenuIconWell, styles.actionMenuIconWellSuccess]}>
+                      <CheckCircle size={18} color={theme.colors.success} strokeWidth={2} />
+                    </View>
+                    <View style={styles.actionMenuItemTextBlock}>
+                      <Text style={styles.actionMenuText}>
+                        {isFinalizing ? 'Finalizing…' : 'Mark as Final'}
+                      </Text>
+                      <Text style={styles.actionMenuHint}>Creates a locked FINAL version</Text>
+                    </View>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.actionMenuItem, isFinalizing && styles.actionMenuItemDisabled]}
+                    onPress={() => {
+                      setShowActionMenu(false);
+                      handleUnfinalize();
+                    }}
+                    disabled={isFinalizing}
+                    activeOpacity={0.75}>
+                    <View style={[styles.actionMenuIconWell, styles.actionMenuIconWellWarning]}>
+                      <Circle size={18} color={theme.colors.warning} strokeWidth={2} />
+                    </View>
+                    <View style={styles.actionMenuItemTextBlock}>
+                      <Text style={styles.actionMenuText}>
+                        {isFinalizing ? 'Reverting…' : 'Remove Final Status'}
+                      </Text>
+                      <Text style={styles.actionMenuHint}>Allow new versions again</Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+                <View style={styles.actionMenuDivider} />
                 <TouchableOpacity
                   style={styles.actionMenuItem}
                   onPress={() => {
                     setShowActionMenu(false);
-                    handleFinalize();
+                    setShowShareModal(true);
                   }}
-                  disabled={isFinalizing || !currentVersion}>
-                  <CheckCircle size={20} color={theme.colors.success} />
-                  <Text style={styles.actionMenuText}>
-                    {isFinalizing ? 'Finalizing...' : 'Mark as Final'}
-                  </Text>
+                  activeOpacity={0.75}>
+                  <View style={styles.actionMenuIconWell}>
+                    <Share size={18} color={theme.colors.textPrimary} strokeWidth={2} />
+                  </View>
+                  <View style={styles.actionMenuItemTextBlock}>
+                    <Text style={styles.actionMenuText}>Share with Client</Text>
+                    <Text style={styles.actionMenuHint}>Review link, password, expiry</Text>
+                  </View>
                 </TouchableOpacity>
-              ) : (
+                <View style={styles.actionMenuDividerStrong} />
                 <TouchableOpacity
-                  style={styles.actionMenuItem}
-                  onPress={() => {
-                    setShowActionMenu(false);
-                    handleUnfinalize();
-                  }}
-                  disabled={isFinalizing}>
-                  <Circle size={20} color={theme.colors.warning} />
-                  <Text style={styles.actionMenuText}>
-                    {isFinalizing ? 'Reverting...' : 'Remove Final Status'}
-                  </Text>
+                  style={[styles.actionMenuItem, styles.actionMenuCancel]}
+                  onPress={() => setShowActionMenu(false)}
+                  activeOpacity={0.75}>
+                  <Text style={styles.actionMenuCancelText}>Cancel</Text>
                 </TouchableOpacity>
-              )}
-              <View style={styles.actionMenuDivider} />
-              <TouchableOpacity
-                style={styles.actionMenuItem}
-                onPress={() => {
-                  setShowActionMenu(false);
-                  setShowShareModal(true);
-                }}>
-                <Share size={20} color={theme.colors.textPrimary} />
-                <Text style={styles.actionMenuText}>Share with Client</Text>
-              </TouchableOpacity>
-              <View style={styles.actionMenuDivider} />
-              <TouchableOpacity
-                style={[styles.actionMenuItem, styles.actionMenuCancel]}
-                onPress={() => setShowActionMenu(false)}>
-                <Text style={styles.actionMenuCancelText}>Cancel</Text>
-              </TouchableOpacity>
+              </View>
             </View>
-          </TouchableOpacity>
+          </View>
         </Modal>
 
         {/* Comment popup - triggered from video overlay (Modal only when NOT fullscreen; fullscreen uses overlay inside VideoPlayer) */}
@@ -1207,48 +1390,26 @@ export function DeliverableReviewScreen() {
                 activeOpacity={1}
                 onPress={e => e.stopPropagation()}
                 style={[styles.commentPopupContent, {paddingHorizontal: Math.max(insets.left, insets.right, theme.spacing.md), paddingBottom: Math.max(insets.bottom, theme.spacing.sm)}]}>
-              <View style={styles.commentPopupInputRow}>
-                <TouchableOpacity
-                  style={styles.timestampButton}
-                  onPress={addTimestamp}>
-                  <Clock size={14} color="rgba(255, 255, 255, 0.7)" />
-                  <Text style={styles.timestampButtonText}>
-                    {formatVideoTimestamp(currentVideoTime)}
-                  </Text>
-                </TouchableOpacity>
-                <TextInput
-                  style={styles.commentPopupInput}
-                  placeholder="Leave feedback..."
-                  placeholderTextColor={theme.colors.textMuted}
-                  value={commentText}
-                  onChangeText={setCommentText}
-                  multiline
-                  maxLength={1000}
-                  autoFocus
-                  autoCorrect={false}
-                  autoCapitalize="none"
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.sendButton,
-                    (!commentText.trim() || isSubmitting) && styles.sendButtonDisabled,
-                  ]}
-                  onPress={async () => {
-                    await handleSubmitComment();
-                    setShowCommentPopup(false);
-                  }}
-                  disabled={!commentText.trim() || isSubmitting}>
-                  {isSubmitting ? (
-                    <ActivityIndicator size="small" color={theme.colors.textPrimary} />
-                  ) : (
-                    <Send
-                      size={18}
-                      color={commentText.trim() ? theme.colors.textPrimary : theme.colors.textMuted}
-                    />
-                  )}
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
+                <Animated.View style={{transform: [{scale: commentBarFocusAnim}]}}>
+                  <CommentComposerGlassRow
+                    commentText={commentText}
+                    onChangeText={setCommentText}
+                    currentVideoTime={currentVideoTime}
+                    onTimestampPress={addTimestamp}
+                    onSubmit={async () => {
+                      await handleSubmitComment();
+                      setShowCommentPopup(false);
+                    }}
+                    isSubmitting={isSubmitting}
+                    inputStyle={styles.commentPopupInput}
+                    borderRadius={20}
+                    autoFocus
+                    textInputProps={{autoCapitalize: 'none'}}
+                    onInputFocus={() => runCommentBarFocus(true)}
+                    onInputBlur={() => runCommentBarFocus(false)}
+                  />
+                </Animated.View>
+              </TouchableOpacity>
             </KeyboardAvoidingView>
           </TouchableOpacity>
         </Modal>
@@ -1278,7 +1439,11 @@ export function DeliverableReviewScreen() {
           transparent
           animationType="fade"
           onRequestClose={() => {
-            if (downloadStatus !== 'downloading' && downloadStatus !== 'saving') {
+            if (downloadStatus === 'downloading') {
+              cancelActiveDownloadFetch();
+              return;
+            }
+            if (downloadStatus !== 'saving') {
               resetDownloadModal();
             }
           }}>
@@ -1346,6 +1511,15 @@ export function DeliverableReviewScreen() {
                 </View>
               )}
 
+              {downloadStatus === 'downloading' && (
+                <TouchableOpacity
+                  style={downloadModalStyles.cancelDownloadButton}
+                  onPress={cancelActiveDownloadFetch}
+                  activeOpacity={0.8}>
+                  <Text style={downloadModalStyles.cancelDownloadButtonText}>Cancel</Text>
+                </TouchableOpacity>
+              )}
+
               {/* Success message */}
               {downloadStatus === 'success' && (
                 <Text style={downloadModalStyles.successText}>
@@ -1378,9 +1552,43 @@ export function DeliverableReviewScreen() {
           </View>
         </Modal>
       </KeyboardAvoidingView>
+      </Swipeable>
     </SafeAreaView>
   );
 }
+
+const swipeActionsStyles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    justifyContent: 'flex-end',
+    marginLeft: 8,
+  },
+  action: {
+    width: 72,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  download: {
+    backgroundColor: '#3b82f6',
+  },
+  finalize: {
+    backgroundColor: theme.colors.success,
+  },
+  unfinalize: {
+    backgroundColor: theme.colors.warning,
+  },
+  share: {
+    backgroundColor: '#8b5cf6',
+  },
+  actionText: {
+    color: '#fff',
+    fontSize: 11,
+    fontFamily: theme.typography.fontFamily.semibold,
+    marginTop: 4,
+  },
+});
 
 // ===== SHARE MODAL COMPONENT =====
 
@@ -1421,6 +1629,7 @@ function ShareModal({
 }: ShareModalProps) {
   const versionDisplay = versionNumber === 100 ? 'Final' : `V${versionNumber}`;
   const {height: SCREEN_HEIGHT} = Dimensions.get('window');
+  const insets = useSafeAreaInsets();
   
   // Animation values
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
@@ -1516,7 +1725,7 @@ function ShareModal({
               transform: [{translateY: slideAnim}],
             },
           ]}>
-          <SafeAreaView style={shareModalStyles.safeArea} edges={['top']}>
+          <SafeAreaView style={shareModalStyles.safeArea} edges={['top', 'bottom']}>
             {/* Header */}
             <View style={shareModalStyles.header}>
               <Text style={shareModalStyles.headerTitle}>SHARE WITH CLIENT</Text>
@@ -1532,7 +1741,11 @@ function ShareModal({
               <ScrollView
                 style={shareModalStyles.content}
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={shareModalStyles.contentContainer}>
+                contentContainerStyle={[
+                  shareModalStyles.contentContainer,
+                  {paddingBottom: insets.bottom + theme.spacing.xl * 1.5},
+                ]}
+                keyboardShouldPersistTaps="handled">
             {!shareCreated ? (
               <>
                 <Text style={shareModalStyles.description}>
@@ -1596,15 +1809,14 @@ function ShareModal({
                 {/* Allow Downloads */}
                 <View style={shareModalStyles.field}>
                   <View style={shareModalStyles.switchRow}>
-                    <Text style={shareModalStyles.label}>Allow Downloads</Text>
-                    <Switch
+                    <Text style={[shareModalStyles.label, shareModalStyles.switchLabel]}>
+                      Allow Downloads
+                    </Text>
+                    <AppleNativeGlassSwitch
                       value={allowDownloads}
                       onValueChange={setAllowDownloads}
-                      trackColor={{
-                        false: theme.colors.surfaceBorder,
-                        true: theme.colors.accent,
-                      }}
-                      thumbColor={theme.colors.textPrimary}
+                      tint={theme.colors.accent}
+                      accessibilityLabel="Allow client downloads"
                     />
                   </View>
                   <Text style={shareModalStyles.hint}>
@@ -1808,6 +2020,21 @@ const downloadModalStyles = StyleSheet.create({
     color: theme.colors.textMuted,
     textAlign: 'center',
   },
+  cancelDownloadButton: {
+    marginTop: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.xl,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    width: '100%',
+    alignItems: 'center',
+  },
+  cancelDownloadButtonText: {
+    fontSize: theme.typography.fontSize.md,
+    fontFamily: theme.typography.fontFamily.medium,
+    color: theme.colors.textSecondary,
+  },
   successText: {
     fontSize: theme.typography.fontSize.sm,
     fontFamily: theme.typography.fontFamily.regular,
@@ -1973,6 +2200,12 @@ const shareModalStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: theme.spacing.md,
+  },
+  switchLabel: {
+    flex: 1,
+    marginBottom: 0,
+    alignSelf: 'center',
   },
   actions: {
     flexDirection: 'row',
@@ -2081,6 +2314,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.background,
   },
+  swipeableContainer: {
+    flex: 1,
+  },
+  swipeableChildren: {
+    flex: 1,
+  },
   keyboardView: {
     flex: 1,
   },
@@ -2089,19 +2328,57 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // Action menu styles
+  // Action menu — aligned with theme (zinc/black, sharp edges, Montserrat labels)
   actionMenuOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: 'rgba(0, 0, 0, 0.82)',
     justifyContent: 'flex-end',
+  },
+  actionMenuSheet: {
     paddingHorizontal: theme.spacing.md,
-    paddingBottom: theme.spacing.xl,
   },
   actionMenuContainer: {
-    backgroundColor: '#1A1A1A',
+    backgroundColor: theme.colors.surfaceElevated,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: theme.colors.border,
     overflow: 'hidden',
+  },
+  actionMenuGrabber: {
+    alignSelf: 'center',
+    width: 36,
+    height: 3,
+    marginTop: theme.spacing.sm,
+    marginBottom: theme.spacing.xs,
+    backgroundColor: theme.colors.borderActive,
+    opacity: 0.5,
+  },
+  actionMenuHeader: {
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.md,
+  },
+  actionMenuHeaderEyebrow: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.fontSize.xs,
+    fontFamily: theme.typography.fontFamily.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: theme.typography.letterSpacing.wide,
+    marginBottom: 6,
+  },
+  actionMenuHeaderTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.lg,
+    fontFamily: theme.typography.fontFamily.bold,
+    letterSpacing: theme.typography.letterSpacing.tight,
+  },
+  actionMenuDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: theme.colors.divider,
+    marginLeft: theme.spacing.lg + 40 + theme.spacing.md,
+  },
+  actionMenuDividerStrong: {
+    height: 1,
+    backgroundColor: theme.colors.border,
   },
   actionMenuItem: {
     flexDirection: 'row',
@@ -2109,49 +2386,104 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing.md,
     paddingHorizontal: theme.spacing.lg,
     gap: theme.spacing.md,
+    backgroundColor: 'transparent',
+  },
+  actionMenuItemDisabled: {
+    opacity: 0.5,
+  },
+  actionMenuIconWell: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceHover,
+  },
+  actionMenuIconWellSuccess: {
+    borderColor: theme.colors.successBorder,
+    backgroundColor: theme.colors.successBackground,
+  },
+  actionMenuIconWellWarning: {
+    borderColor: theme.colors.warningBorder,
+    backgroundColor: theme.colors.warningBackground,
+  },
+  actionMenuItemTextBlock: {
+    flex: 1,
+    minWidth: 0,
   },
   actionMenuText: {
     color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.md,
-    fontFamily: theme.typography.fontFamily.medium,
+    fontSize: theme.typography.fontSize.sm,
+    fontFamily: theme.typography.fontFamily.semibold,
+    letterSpacing: 0.2,
   },
-  actionMenuDivider: {
-    height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+  actionMenuTextMuted: {
+    color: theme.colors.textMuted,
+  },
+  actionMenuHint: {
+    marginTop: 3,
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.fontSize.xs,
+    fontFamily: theme.typography.fontFamily.regular,
+    lineHeight: 16,
   },
   actionMenuCancel: {
     justifyContent: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    paddingVertical: theme.spacing.md,
+    backgroundColor: theme.colors.surfaceHover,
   },
   actionMenuCancelText: {
-    color: theme.colors.textMuted,
-    fontSize: theme.typography.fontSize.md,
-    fontFamily: theme.typography.fontFamily.medium,
+    color: theme.colors.textSecondary,
+    fontSize: theme.typography.fontSize.xs,
+    fontFamily: theme.typography.fontFamily.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: theme.typography.letterSpacing.wide,
     textAlign: 'center',
-    flex: 1,
   },
   versionSelector: {
     flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.xs,
-    paddingBottom: 0,
-    gap: theme.spacing.lg,
+    paddingVertical: theme.spacing.xs,
+    gap: theme.spacing.xs,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255, 255, 255, 0.08)',
   },
+  versionNavButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  versionNavButtonDisabled: {
+    opacity: 0.45,
+  },
+  versionScrollContent: {
+    gap: theme.spacing.sm,
+    paddingRight: theme.spacing.xs,
+  },
   versionButton: {
-    paddingVertical: theme.spacing.sm,
-    paddingHorizontal: 0,
-    backgroundColor: 'transparent',
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
+    paddingVertical: theme.spacing.xs,
+    paddingHorizontal: theme.spacing.sm,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    minWidth: 48,
+    alignItems: 'center',
   },
   versionButtonActive: {
-    borderBottomColor: theme.colors.textPrimary,
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
+    borderColor: 'rgba(255, 255, 255, 0.25)',
   },
   versionText: {
     color: theme.colors.textMuted,
-    fontSize: theme.typography.fontSize.sm,
+    fontSize: theme.typography.fontSize.xs,
     fontWeight: '500',
   },
   versionTextActive: {
@@ -2168,7 +2500,7 @@ const styles = StyleSheet.create({
   versionButtonMarkFinal: {
     flexDirection: 'row',
     alignItems: 'center',
-    opacity: 0.6,
+    opacity: 0.8,
   },
   versionTextMarkFinal: {
     color: theme.colors.textMuted,
@@ -2225,56 +2557,25 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.fontSize.md,
     textAlign: 'center',
   },
-  commentInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: theme.spacing.md,
+  commentInputOuter: {
+    // Horizontal padding is owned by the flat composer's internal row so the
+    // gradient hairline divider can run edge-to-edge like in the assistant.
+    paddingHorizontal: 0,
     paddingTop: theme.spacing.sm,
     paddingBottom: theme.spacing.xl,
-    backgroundColor: '#0A0A0A',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.08)',
-    gap: theme.spacing.sm,
-  },
-  timestampButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'transparent',
-    paddingHorizontal: 8,
-    paddingVertical: 0,
-    height: 44,
-    gap: 4,
-  },
-  timestampButtonText: {
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: 12,
-    fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 0.5,
   },
   commentInput: {
     flex: 1,
     color: theme.colors.textPrimary,
     fontSize: theme.typography.fontSize.md,
     maxHeight: 100,
-    minHeight: 44,
-    paddingVertical: 12,
-    paddingHorizontal: 0,
+    minHeight: 40,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
     textAlignVertical: 'center',
   },
   commentInputNoTimestamp: {
     paddingLeft: 0,
-  },
-  sendButton: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'transparent',
-    paddingVertical: 0,
-  },
-  sendButtonDisabled: {
-    backgroundColor: 'transparent',
   },
   commentPopupOverlay: {
     flex: 1,
@@ -2287,15 +2588,10 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   commentPopupContent: {
-    backgroundColor: theme.colors.surfaceElevated,
+    backgroundColor: 'transparent',
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingTop: theme.spacing.sm,
-  },
-  commentPopupInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.sm,
   },
   commentPopupInput: {
     flex: 1,
