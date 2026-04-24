@@ -415,9 +415,18 @@ function CalendarStackNavigator() {
   );
 }
 
+/** iOS native tabs: Navigation theme uses `colors.card: transparent`, which became the default
+ *  `tabBarBackgroundColor` — on the simulator the bar can look like floating icons with no chrome.
+ *  Give the tab bar its own dark surface (still works with blur on device). */
 const nativeTabScreenOptions = {
   headerShown: false,
   sceneStyle: {backgroundColor: 'transparent' as const},
+  tabBarActiveTintColor: '#FFFFFF',
+  tabBarInactiveTintColor: 'rgba(255,255,255,0.42)',
+  tabBarBlurEffect: 'systemMaterialDark' as const,
+  tabBarStyle: {
+    backgroundColor: 'rgba(10, 10, 10, 0.94)',
+  },
 };
 
 function IOSNativeMainTabs() {
@@ -1138,6 +1147,9 @@ const styles = StyleSheet.create({
   },
   mainPagerRoot: {
     flex: 1,
+    // Opaque base so transparent tab scenes / stack cards (Assistant, etc.) never show the
+    // system window color (white in light mode). Dashboard still paints its own backdrop on top.
+    backgroundColor: theme.colors.background,
   },
   mainPagerContent: {
     flex: 1,

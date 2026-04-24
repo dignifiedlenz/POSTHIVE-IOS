@@ -72,6 +72,8 @@
 		<string>Montserrat-VariableFont_wght.ttf</string>
 		<string>Montserrat-Italic-VariableFont_wght.ttf</string>
 		<string>MillerBanner-LightItalic.otf</string>
+		<string>MillerBannerExtraCompressed-Light.otf</string>
+		<string>MillerBannerExtraCondensed-Light.otf</string>
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>

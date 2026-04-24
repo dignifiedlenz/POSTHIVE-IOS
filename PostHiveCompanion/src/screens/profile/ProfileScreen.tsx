@@ -135,9 +135,11 @@ export function ProfileScreen() {
         {/* Avatar Section */}
         <Animated.View style={[styles.avatarSection, getAnimatedStyle(0)]}>
           <View style={styles.avatar}>
-            <User size={32} color={theme.colors.textPrimary} />
+            <User size={22} color={theme.colors.textPrimary} />
           </View>
-          <Text style={styles.userName}>{userName}</Text>
+          <Text style={styles.userName} numberOfLines={2}>
+            {userName}
+          </Text>
         </Animated.View>
 
         {/* Info Cards */}
@@ -145,7 +147,7 @@ export function ProfileScreen() {
           {user?.email && (
             <TouchableOpacity style={styles.infoCard} activeOpacity={0.7}>
               <View style={styles.infoIcon}>
-                <Mail size={16} color={theme.colors.textSecondary} />
+                <Mail size={14} color={theme.colors.textSecondary} />
               </View>
               <View style={styles.infoContent}>
                 <Text style={styles.infoLabel}>EMAIL</Text>
@@ -154,21 +156,21 @@ export function ProfileScreen() {
             </TouchableOpacity>
           )}
 
-          {currentWorkspace && (
-            <TouchableOpacity 
-              style={styles.infoCard} 
+          {currentWorkspace && canSwitchWorkspace && (
+            <TouchableOpacity
+              style={styles.infoCard}
               activeOpacity={0.7}
-              onPress={canSwitchWorkspace ? () => setShowWorkspaceDropdown(true) : undefined}>
+              onPress={() => setShowWorkspaceDropdown(true)}>
               <View style={styles.infoIcon}>
-                <Building2 size={16} color={theme.colors.textSecondary} />
+                <Building2 size={14} color={theme.colors.textSecondary} />
               </View>
               <View style={styles.infoContent}>
                 <Text style={styles.infoLabel}>WORKSPACE</Text>
-                <Text style={styles.infoValue} numberOfLines={1}>{currentWorkspace.name}</Text>
+                <Text style={styles.infoValue} numberOfLines={1}>
+                  {currentWorkspace.name}
+                </Text>
               </View>
-              {canSwitchWorkspace && (
-                <ChevronRight size={16} color={theme.colors.textMuted} />
-              )}
+              <ChevronRight size={16} color={theme.colors.textMuted} />
             </TouchableOpacity>
           )}
         </Animated.View>
@@ -181,12 +183,12 @@ export function ProfileScreen() {
               onPress={() => navigation.navigate('TransferHistory' as never)}
               activeOpacity={0.7}>
               <View style={styles.settingsButtonIcon}>
-                <History size={16} color={theme.colors.textSecondary} />
+                <History size={14} color={theme.colors.textSecondary} />
               </View>
               <View style={styles.settingsButtonContent}>
                 <Text style={styles.settingsButtonTitle}>Transfer History</Text>
                 <Text style={styles.settingsButtonSubtitle} numberOfLines={1}>
-                  Search files and see when they were transferred
+                  File transfer activity
                 </Text>
               </View>
               <ChevronRight size={16} color={theme.colors.textMuted} />
@@ -199,12 +201,12 @@ export function ProfileScreen() {
               onPress={() => navigation.navigate('NotificationSettings' as never)}
               activeOpacity={0.7}>
               <View style={styles.settingsButtonIcon}>
-                <Bell size={16} color={theme.colors.textSecondary} />
+                <Bell size={14} color={theme.colors.textSecondary} />
               </View>
               <View style={styles.settingsButtonContent}>
                 <Text style={styles.settingsButtonTitle}>Notifications</Text>
                 <Text style={styles.settingsButtonSubtitle} numberOfLines={1}>
-                  Manage notification preferences
+                  Push & email
                 </Text>
               </View>
               <ChevronRight size={16} color={theme.colors.textMuted} />
@@ -220,7 +222,7 @@ export function ProfileScreen() {
               onPress={() => Linking.openURL('https://www.posthive.app/legal/privacy')}
               activeOpacity={0.7}>
               <View style={styles.settingsButtonIcon}>
-                <FileText size={16} color={theme.colors.textSecondary} />
+                <FileText size={14} color={theme.colors.textSecondary} />
               </View>
               <View style={styles.settingsButtonContent}>
                 <Text style={styles.settingsButtonTitle}>Privacy Policy</Text>
@@ -235,7 +237,7 @@ export function ProfileScreen() {
               onPress={() => Linking.openURL('https://www.posthive.app/legal/terms')}
               activeOpacity={0.7}>
               <View style={styles.settingsButtonIcon}>
-                <FileText size={16} color={theme.colors.textSecondary} />
+                <FileText size={14} color={theme.colors.textSecondary} />
               </View>
               <View style={styles.settingsButtonContent}>
                 <Text style={styles.settingsButtonTitle}>Terms of Service</Text>
@@ -256,12 +258,12 @@ export function ProfileScreen() {
               }}
               activeOpacity={0.7}>
               <View style={styles.settingsButtonIcon}>
-                <HelpCircle size={16} color={theme.colors.textSecondary} />
+                <HelpCircle size={14} color={theme.colors.textSecondary} />
               </View>
               <View style={styles.settingsButtonContent}>
                 <Text style={styles.settingsButtonTitle}>Contact Support</Text>
                 <Text style={styles.settingsButtonSubtitle} numberOfLines={1}>
-                  Get help or report an issue
+                  Email support
                 </Text>
               </View>
               <ChevronRight size={16} color={theme.colors.textMuted} />
@@ -280,12 +282,12 @@ export function ProfileScreen() {
               }}
               activeOpacity={0.7}>
               <View style={styles.settingsButtonIcon}>
-                <MessageSquare size={16} color={theme.colors.textSecondary} />
+                <MessageSquare size={14} color={theme.colors.textSecondary} />
               </View>
               <View style={styles.settingsButtonContent}>
                 <Text style={styles.settingsButtonTitle}>Feedback</Text>
                 <Text style={styles.settingsButtonSubtitle} numberOfLines={1}>
-                  Share your thoughts or report bugs
+                  Bugs & ideas
                 </Text>
               </View>
               <ChevronRight size={16} color={theme.colors.textMuted} />
@@ -362,8 +364,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.sm,
-    paddingBottom: theme.spacing.md,
+    paddingTop: theme.spacing.xs,
+    paddingBottom: theme.spacing.sm,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
   },
@@ -387,46 +389,48 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     paddingHorizontal: theme.spacing.md,
-    paddingTop: theme.spacing.lg,
-    paddingBottom: theme.spacing.xl * 2,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.xl + theme.spacing.md,
   },
   avatarSection: {
     alignItems: 'center',
-    paddingVertical: theme.spacing.lg,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.xs,
   },
   avatar: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: 'transparent',
     borderWidth: 1,
     borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: theme.spacing.sm,
+    marginBottom: theme.spacing.xs,
   },
   userName: {
-    fontSize: theme.typography.fontSize.lg,
+    fontSize: theme.typography.fontSize.md,
     fontWeight: '700',
     color: theme.colors.textPrimary,
     textTransform: 'uppercase',
     letterSpacing: theme.typography.letterSpacing.wide,
+    textAlign: 'center',
   },
   infoSection: {
-    gap: theme.spacing.xs,
-    marginTop: theme.spacing.md,
+    gap: 2,
+    marginTop: theme.spacing.sm,
   },
   infoCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'transparent',
-    paddingVertical: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
     paddingHorizontal: theme.spacing.md,
     gap: theme.spacing.sm,
   },
   infoIcon: {
-    width: 32,
-    height: 32,
+    width: 28,
+    height: 28,
     backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
@@ -439,14 +443,15 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: theme.colors.textMuted,
     letterSpacing: theme.typography.letterSpacing.wide,
-    marginBottom: 1,
+    marginBottom: 0,
   },
   infoValue: {
     fontSize: theme.typography.fontSize.sm,
     color: theme.colors.textPrimary,
+    marginTop: 1,
   },
   settingsSection: {
-    marginTop: theme.spacing.lg,
+    marginTop: theme.spacing.md,
   },
   settingsCard: {
     backgroundColor: 'transparent',
@@ -454,18 +459,19 @@ const styles = StyleSheet.create({
   settingsButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: theme.spacing.sm,
+    paddingVertical: 8,
     paddingHorizontal: theme.spacing.md,
     gap: theme.spacing.sm,
+    minHeight: theme.sizes.buttonHeight,
   },
   separator: {
     height: 1,
     backgroundColor: theme.colors.border,
-    marginLeft: theme.spacing.md + 32 + theme.spacing.md,
+    marginLeft: theme.spacing.md + 28 + theme.spacing.sm,
   },
   settingsButtonIcon: {
-    width: 32,
-    height: 32,
+    width: 28,
+    height: 28,
     backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
@@ -477,14 +483,16 @@ const styles = StyleSheet.create({
     fontSize: theme.typography.fontSize.sm,
     fontWeight: '600',
     color: theme.colors.textPrimary,
-    marginBottom: 1,
+    marginBottom: 0,
   },
   settingsButtonSubtitle: {
     fontSize: theme.typography.fontSize.xs,
     color: theme.colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 14,
   },
   actionsSection: {
-    marginTop: theme.spacing.xl,
+    marginTop: theme.spacing.lg,
     gap: theme.spacing.xs,
   },
   switchWorkspaceButton: {

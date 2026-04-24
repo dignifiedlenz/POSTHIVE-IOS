@@ -27,18 +27,26 @@ type NativeProps = {
   style?: StyleProp<ViewStyle>;
 };
 
-let cachedNative: HostComponent<NativeProps> | null | undefined;
+type GlobalWithFabChromeHost = typeof globalThis & {
+  __PostHiveAppleNativeFabChrome?: HostComponent<NativeProps>;
+};
 
+/**
+ * `requireNativeComponent` registers globally by name; calling it again (e.g. after Fast Refresh)
+ * throws "Tried to register two views with the same name". Persist the host on globalThis.
+ */
 function getIosNativeHost(): HostComponent<NativeProps> | null {
-  if (cachedNative !== undefined) {
-    return cachedNative;
+  const g = globalThis as GlobalWithFabChromeHost;
+  const existing = g.__PostHiveAppleNativeFabChrome;
+  if (existing != null) {
+    return existing;
   }
-  if (UIManager.getViewManagerConfig(NATIVE_VIEW_NAME) == null) {
-    cachedNative = null;
+  if (Platform.OS !== 'ios' || UIManager.getViewManagerConfig(NATIVE_VIEW_NAME) == null) {
     return null;
   }
-  cachedNative = requireNativeComponent<NativeProps>(NATIVE_VIEW_NAME);
-  return cachedNative;
+  const Comp = requireNativeComponent<NativeProps>(NATIVE_VIEW_NAME);
+  g.__PostHiveAppleNativeFabChrome = Comp;
+  return Comp;
 }
 
 /** True when the SwiftUI FAB view manager is registered (New Arch interop). */

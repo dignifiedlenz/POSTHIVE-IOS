@@ -48,6 +48,13 @@ type NavigationProp = CompositeNavigationProp<
 >;
 const DEFAULT_THUMBNAIL = 'https://www.posthive.app/thumbnail/default.png';
 
+function titleCaseWords(s: string): string {
+  return s
+    .split(/\s+/)
+    .map(part => (part.length ? part[0].toUpperCase() + part.slice(1).toLowerCase() : ''))
+    .join(' ');
+}
+
 export function DashboardScreen() {
   const navigation = useNavigation<NavigationProp>();
   const scrollViewRef = React.useRef<ScrollView>(null);
@@ -584,15 +591,25 @@ export function DashboardScreen() {
             tintColor={theme.colors.textPrimary}
           />
         }>
-        {/* Greeting — plain system fonts. Day/date eyebrow on top, then the
-            time-of-day salutation underneath in regular sans. */}
+        {/* Greeting — Miller Banner Light (upright), left-aligned; date eyebrow above. */}
         <View style={styles.greetingSection} pointerEvents="none">
           <Text style={styles.greetingDate} numberOfLines={1}>
             {format(new Date(), 'EEEE, MMMM d').toUpperCase()}
           </Text>
-          <Text style={styles.greetingText} numberOfLines={1} adjustsFontSizeToFit>
-            {firstName ? `${greeting}, ${firstName}` : greeting}
-          </Text>
+          {firstName ? (
+            <>
+              <Text style={styles.greetingSalutation} numberOfLines={1}>
+                {titleCaseWords(greeting)},
+              </Text>
+              <Text style={styles.greetingName} numberOfLines={2}>
+                {firstName}
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.greetingName} numberOfLines={2}>
+              {titleCaseWords(greeting)}
+            </Text>
+          )}
         </View>
         {/* Calendar — next up */}
         <Animated.View
@@ -1144,27 +1161,42 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing.xs,
   },
   greetingSection: {
-    paddingHorizontal: theme.spacing.lg,
-    paddingTop: theme.spacing.md,
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
     paddingBottom: theme.spacing.md,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'flex-start',
   },
   greetingDate: {
     color: theme.colors.textMuted,
     fontSize: 11,
     letterSpacing: 1.8,
-    textAlign: 'center',
+    textAlign: 'left',
     fontFamily: theme.typography.fontFamily.semibold,
-    marginBottom: 4,
+    marginBottom: theme.spacing.sm,
+    alignSelf: 'stretch',
   },
-  greetingText: {
-    color: theme.colors.textPrimary,
-    fontSize: 22,
-    lineHeight: 28,
-    textAlign: 'center',
-    fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 0.1,
+  greetingSalutation: {
+    color: 'rgba(245, 245, 245, 0.92)',
+    fontSize: 42,
+    lineHeight: 48,
+    textAlign: 'left',
+    fontFamily: theme.typography.fontFamily.serifLight,
+    fontStyle: 'normal',
+    fontWeight: '400',
+    letterSpacing: 0.2,
+    alignSelf: 'stretch',
+  },
+  greetingName: {
+    color: 'rgba(245, 245, 245, 0.92)',
+    fontSize: 48,
+    lineHeight: 54,
+    textAlign: 'left',
+    fontFamily: theme.typography.fontFamily.serifLight,
+    fontStyle: 'normal',
+    fontWeight: '400',
+    letterSpacing: 0.2,
+    marginTop: 2,
+    alignSelf: 'stretch',
   },
   upcomingEventCard: {
     flexDirection: 'row',

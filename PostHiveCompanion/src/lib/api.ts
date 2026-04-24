@@ -2329,6 +2329,9 @@ export type AILastCreatedItem = {
   name?: string;
 };
 
+/** Resolved @mentions from the assistant composer (mobile). */
+export type AICommandMentionAssignment = {user_id: string; name: string};
+
 export async function executeAICommand(
   command: string,
   workspaceSlug: string,
@@ -2336,6 +2339,7 @@ export async function executeAICommand(
     priorConversation?: AICommandTurn[];
     userTimeZone?: string;
     lastCreatedItem?: AILastCreatedItem | null;
+    mentionAssignments?: AICommandMentionAssignment[];
   },
 ): Promise<AICommandResult> {
   const {data: sessionData} = await supabase.auth.getSession();
@@ -2374,6 +2378,9 @@ export async function executeAICommand(
       priorConversation: options?.priorConversation ?? [],
       userTimeZone,
       lastCreatedItem: options?.lastCreatedItem ?? null,
+      mentionAssignments: options?.mentionAssignments?.length
+        ? options.mentionAssignments
+        : undefined,
     }),
   });
 

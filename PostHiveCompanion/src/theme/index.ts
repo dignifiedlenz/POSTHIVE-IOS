@@ -126,6 +126,16 @@ export const theme = {
         android: 'MillerBanner-LightItalic',
         default: 'MillerBannerExtraCompressed-LightItalic',
       }) as string,
+      /**
+       * Upright Miller Banner Light for hero greetings (dashboard, etc.).
+       * Extra Condensed reads wider than Extra Compressed (previous default). Standard-width
+       * Miller Banner would need its own licensed OTF and PostScript name here.
+       */
+      serifLight: Platform.select({
+        ios: 'MillerBannerExtraCondensed-Light',
+        android: 'MillerBannerExtraCondensed-Light',
+        default: 'MillerBannerExtraCondensed-Light',
+      }) as string,
     },
     fontSize: {
       xs: 11, // Labels, metadata

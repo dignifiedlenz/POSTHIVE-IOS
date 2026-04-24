@@ -22,12 +22,23 @@ import {theme} from '../../theme';
 import {useAuth} from '../../hooks/useAuth';
 import {
   executeAICommand,
+  getWorkspaceMembers,
   type AICommandTurn,
   type AICommandData,
   type AILastCreatedItem,
 } from '../../lib/api';
+import type {WorkspaceMember} from '../../lib/types';
+import {
+  getActiveMention,
+  filterMembersForMentionQuery,
+  extractResolvedMentions,
+} from '../../lib/assistantMentions';
 import {MarkdownText} from '../../components/MarkdownText';
 import {AssistantResultCard} from '../../components/AssistantResultCard';
+import {AssistantEventInline} from '../../components/AssistantEventInline';
+import {AssistantTodoInline} from '../../components/AssistantTodoInline';
+import {WebSearchInline} from '../../components/WebSearchInline';
+import {AssistantMentionPicker} from '../../components/AssistantMentionPicker';
 import {useTabBar} from '../../contexts/TabBarContext';
 
 type ChatRole = 'user' | 'assistant';
@@ -48,6 +59,7 @@ const ROTATING_HINTS = [
   'Will it rain tomorrow?',
   'When am I free Monday afternoon?',
   'Remind me to review the wedding video tomorrow',
+  'Remind @teammate to follow up…',
 ];
 
 const MAX_PRIOR_TURNS = 16;
@@ -82,10 +94,88 @@ export function AssistantChatScreen() {
   // Last item the assistant created in this chat session. Sent on subsequent requests so
   // follow-up corrections like "actually it's between 4 and 6pm" can route to update_*.
   const lastCreatedRef = useRef<AILastCreatedItem | null>(null);
+  const inputRef = useRef<TextInput>(null);
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  /** Cursor end position in the composer (for @mention detection). */
+  const [cursorPos, setCursorPos] = useState(0);
+  /** After "Done" on mention menu, hide until the user changes the text length. */
+  const [mentionDismissedAtLen, setMentionDismissedAtLen] = useState<number | null>(null);
+
+  const userTimeZone = useMemo(
+    () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+    [],
+  );
 
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    if (!currentWorkspace?.id) {
+      setMembers([]);
+      return;
+    }
+    let cancelled = false;
+    getWorkspaceMembers(currentWorkspace.id)
+      .then(rows => {
+        if (!cancelled) setMembers(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setMembers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspace?.id]);
+
+  const {showMentionPicker, filteredMentionMembers} = useMemo(() => {
+    if (isListening || !currentWorkspace?.id || members.length === 0) {
+      return {showMentionPicker: false, filteredMentionMembers: [] as WorkspaceMember[]};
+    }
+    const active = getActiveMention(input, cursorPos);
+    if (!active) {
+      return {showMentionPicker: false, filteredMentionMembers: [] as WorkspaceMember[]};
+    }
+    if (mentionDismissedAtLen !== null && mentionDismissedAtLen === input.length) {
+      return {showMentionPicker: false, filteredMentionMembers: [] as WorkspaceMember[]};
+    }
+    const filtered = active.query.trim()
+      ? filterMembersForMentionQuery(members, active.query)
+      : [...members].sort((a, b) => (a.name || '').localeCompare(b.name || '')).slice(0, 24);
+    return {
+      showMentionPicker: filtered.length > 0,
+      filteredMentionMembers: filtered,
+    };
+  }, [
+    input,
+    cursorPos,
+    members,
+    isListening,
+    currentWorkspace?.id,
+    mentionDismissedAtLen,
+  ]);
+
+  const insertMention = useCallback(
+    (m: WorkspaceMember) => {
+      const active = getActiveMention(input, cursorPos);
+      if (!active) return;
+      const {start, query} = active;
+      const before = input.slice(0, start);
+      const after = input.slice(start + 1 + query.length);
+      const name = (m.name || '').trim();
+      if (!name) return;
+      const next = `${before}@${name} ${after}`;
+      const pos = before.length + 1 + name.length + 1;
+      setInput(next);
+      setCursorPos(pos);
+      setMentionDismissedAtLen(null);
+      requestAnimationFrame(() => {
+        const ref = inputRef.current as TextInput & {setSelection?: (s: number, e: number) => void};
+        ref?.setSelection?.(pos, pos);
+      });
+    },
+    [input, cursorPos],
+  );
 
   // Cycle through placeholder hints in the empty state.
   useEffect(() => {
@@ -114,9 +204,13 @@ export function AssistantChatScreen() {
       busyRef.current = true;
       setSending(true);
       try {
+        const mentionAssignments = extractResolvedMentions(text, members);
+
         const result = await executeAICommand(text, currentWorkspace.slug, {
           priorConversation,
           lastCreatedItem: lastCreatedRef.current,
+          userTimeZone,
+          mentionAssignments: mentionAssignments.length ? mentionAssignments : undefined,
         });
 
         // Track newly-created items so follow-ups can correct them in-place.
@@ -172,7 +266,7 @@ export function AssistantChatScreen() {
         setSending(false);
       }
     },
-    [currentWorkspace?.slug],
+    [currentWorkspace?.slug, userTimeZone, members],
   );
 
   submitRef.current = submit;
@@ -218,8 +312,48 @@ export function AssistantChatScreen() {
     const isUser = item.role === 'user';
     // Assistant turns that carry structured tool-result data render as a rich card outside the
     // bubble chrome. Plain answers / fallbacks keep the existing bubble + markdown.
+    const cardType =
+      !isUser && item.data && typeof item.data === 'object'
+        ? ((item.data as any).type as string | undefined)
+        : undefined;
+    const isWebSearch = cardType === 'web_search';
+    const isEvent = cardType === 'event';
+    const isTodo = cardType === 'todo';
+    const todoTitleRaw =
+      item.data && typeof item.data === 'object'
+        ? String((item.data as any).title || (item.data as any).name || '').trim()
+        : '';
+    const hasTodoTile = isTodo && !!todoTitleRaw;
     const hasRichCard =
-      !isUser && item.data && typeof item.data === 'object' && (item.data as any).type;
+      !!cardType && !isWebSearch && !isEvent && !hasTodoTile;
+
+    if (isEvent && item.data) {
+      return (
+        <View
+          style={[
+            styles.bubbleWrap,
+            styles.bubbleWrapAssistant,
+          ]}>
+          <View style={[styles.bubble, styles.bubbleAssistant]}>
+            <AssistantEventInline message={item.text} data={item.data} />
+          </View>
+        </View>
+      );
+    }
+
+    if (hasTodoTile && item.data) {
+      return (
+        <View style={[styles.bubbleWrap, styles.bubbleWrapAssistant]}>
+          <View style={[styles.bubble, styles.bubbleAssistant]}>
+            <AssistantTodoInline
+              data={item.data}
+              onQuickAction={cmd => void submit(cmd)}
+              quickActionsDisabled={sending}
+            />
+          </View>
+        </View>
+      );
+    }
 
     if (hasRichCard) {
       return (
@@ -238,13 +372,18 @@ export function AssistantChatScreen() {
         <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
           {isUser ? (
             <Text style={[styles.bubbleText, styles.bubbleTextUser]}>{item.text}</Text>
+          ) : isWebSearch ? (
+            <WebSearchInline
+              message={item.text}
+              results={(item.data as any)?.results}
+            />
           ) : (
             <MarkdownText style={styles.bubbleText}>{item.text}</MarkdownText>
           )}
         </View>
       </View>
     );
-  }, []);
+  }, [submit, sending]);
 
   const hasMessages = messages.length > 0;
   const placeholder = useMemo(
@@ -255,12 +394,21 @@ export function AssistantChatScreen() {
   const composerChildren = (
     <>
       <TextInput
+        ref={inputRef}
         style={styles.input}
         placeholder={placeholder}
         placeholderTextColor={theme.colors.textMuted}
         value={composerValue}
         onChangeText={t => {
-          if (!isListening) setInput(t);
+          if (!isListening) {
+            setInput(t);
+            setMentionDismissedAtLen(prev =>
+              prev !== null && t.length !== prev ? null : prev,
+            );
+          }
+        }}
+        onSelectionChange={e => {
+          if (!isListening) setCursorPos(e.nativeEvent.selection.end);
         }}
         maxLength={4000}
         editable={!sending && !isListening}
@@ -301,16 +449,14 @@ export function AssistantChatScreen() {
   // in open space); the chat state shows only the top hairline (separator
   // from the message list above).
   const renderFlatComposer = (framed: boolean) => (
-    <View style={styles.flatComposer}>
-      <LinearGradient
-        colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.18)', 'rgba(255,255,255,0)']}
-        start={{x: 0, y: 0.5}}
-        end={{x: 1, y: 0.5}}
-        style={styles.flatDivider}
-        pointerEvents="none"
+    <View style={styles.composerStack}>
+      <AssistantMentionPicker
+        visible={showMentionPicker}
+        members={filteredMentionMembers}
+        onPick={insertMention}
+        onDismiss={() => setMentionDismissedAtLen(input.length)}
       />
-      <View style={styles.flatRow}>{composerChildren}</View>
-      {framed ? (
+      <View style={styles.flatComposer}>
         <LinearGradient
           colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.18)', 'rgba(255,255,255,0)']}
           start={{x: 0, y: 0.5}}
@@ -318,7 +464,17 @@ export function AssistantChatScreen() {
           style={styles.flatDivider}
           pointerEvents="none"
         />
-      ) : null}
+        <View style={styles.flatRow}>{composerChildren}</View>
+        {framed ? (
+          <LinearGradient
+            colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.18)', 'rgba(255,255,255,0)']}
+            start={{x: 0, y: 0.5}}
+            end={{x: 1, y: 0.5}}
+            style={styles.flatDivider}
+            pointerEvents="none"
+          />
+        ) : null}
+      </View>
     </View>
   );
 
@@ -392,7 +548,7 @@ export function AssistantChatScreen() {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: 'transparent',
+    backgroundColor: theme.colors.background,
   },
   flex: {
     flex: 1,
@@ -469,6 +625,9 @@ const styles = StyleSheet.create({
   },
   flatComposerPad: {
     paddingHorizontal: 0,
+  },
+  composerStack: {
+    width: '100%',
   },
   flatComposer: {
     paddingTop: 8,

@@ -2,17 +2,13 @@ import React, {useMemo} from 'react';
 import {StyleSheet, Text, View} from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {
-  Calendar,
   CalendarDays,
-  CheckSquare,
   Clock,
   CloudSun,
   FileText,
   Folder,
   Info,
   ListChecks,
-  MapPin,
-  Search,
   Sparkles,
   Sun,
   Timer,
@@ -36,8 +32,6 @@ export type AssistantResultCardProps = {
 };
 
 const RAIL = {
-  event: '#a78bfa',
-  todo: '#4ade80',
   deliverable: '#facc15',
   project: '#60a5fa',
   resources: '#f472b6',
@@ -45,7 +39,6 @@ const RAIL = {
   schedule: '#38bdf8',
   summary: '#fb923c',
   weather: '#fde047',
-  search: '#94a3b8',
   time: '#a1a1aa',
   default: 'rgba(255,255,255,0.4)',
 } as const;
@@ -58,10 +51,6 @@ export function AssistantResultCard({message, data}: AssistantResultCardProps) {
   }
 
   switch (type) {
-    case 'event':
-      return <EventCard message={message} data={data as any} />;
-    case 'todo':
-      return <TodoCard message={message} data={data as any} />;
     case 'deliverable':
       return <DeliverableCard message={message} data={data as any} />;
     case 'project':
@@ -80,8 +69,6 @@ export function AssistantResultCard({message, data}: AssistantResultCardProps) {
       return <WeatherCard message={message} data={data as any} />;
     case 'time_lookup':
       return <TimeCard message={message} data={data as any} />;
-    case 'web_search':
-      return <SearchCard message={message} data={data as any} />;
     default:
       return <MarkdownText style={styles.fallbackText}>{message}</MarkdownText>;
   }
@@ -170,88 +157,6 @@ function FollowupHint({text}: {text: string}) {
       <Sparkles size={12} color={theme.colors.textMuted} />
       <Text style={styles.hintText}>{text}</Text>
     </View>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Event (created / updated)                                                   */
-/* -------------------------------------------------------------------------- */
-
-function EventCard({message, data}: {message: string; data: any}) {
-  const start = data.start_time ? new Date(data.start_time) : null;
-  const end = data.end_time ? new Date(data.end_time) : null;
-  const isAllDay = !!data.is_all_day;
-  const updated = !!data.updated;
-  const dayLabel = start ? formatLongDay(start) : null;
-  const timeLabel = !isAllDay && start && end ? `${formatTime(start)} – ${formatTime(end)}` : null;
-  const followup = useMemo(() => {
-    if (updated) return null;
-    if (isAllDay) {
-      return 'Tip: say "actually it\'s between 4pm and 6pm" to set a specific time.';
-    }
-    return 'Tip: say "make it 30 min" or "move it to 3pm" to adjust.';
-  }, [isAllDay, updated]);
-
-  return (
-    <CardShell
-      rail={RAIL.event}
-      icon={<Calendar size={14} color={RAIL.event} />}
-      eyebrow={updated ? 'EVENT UPDATED' : 'EVENT CREATED'}
-      title={data.title}>
-      {dayLabel ? <MetaRow icon={<CalendarDays size={13} color={theme.colors.textSecondary} />} value={dayLabel} highlight /> : null}
-      {isAllDay ? (
-        <View style={styles.pillRow}>
-          <Pill label="All-day" color={RAIL.event} />
-          {data.project_name ? <Pill label={data.project_name} /> : null}
-        </View>
-      ) : timeLabel ? (
-        <MetaRow icon={<Clock size={13} color={theme.colors.textSecondary} />} value={timeLabel} highlight />
-      ) : null}
-      {!isAllDay && data.project_name ? (
-        <View style={styles.pillRow}>
-          <Pill label={data.project_name} />
-        </View>
-      ) : null}
-      {data.location ? (
-        <MetaRow icon={<MapPin size={13} color={theme.colors.textSecondary} />} value={data.location} />
-      ) : null}
-      {followup ? <FollowupHint text={followup} /> : null}
-      {/* Surface the conversational sentence at the bottom in case it adds nuance the structured
-          fields don't carry (e.g. defaulted-duration phrasing). */}
-      {message ? <MarkdownText style={styles.cardMessage}>{message}</MarkdownText> : null}
-    </CardShell>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Todo (created / updated)                                                    */
-/* -------------------------------------------------------------------------- */
-
-function TodoCard({message, data}: {message: string; data: any}) {
-  const due = data.due_date ? formatLongDay(new Date(`${data.due_date}T${data.due_time || '00:00'}:00`)) : null;
-  const time = data.due_time ? formatTimeFromHHMM(data.due_time) : null;
-  const priority = (data.priority as string | undefined) || undefined;
-  return (
-    <CardShell
-      rail={RAIL.todo}
-      icon={<CheckSquare size={14} color={RAIL.todo} />}
-      eyebrow="TODO CREATED"
-      title={data.title || data.name}>
-      {due ? (
-        <MetaRow
-          icon={<CalendarDays size={13} color={theme.colors.textSecondary} />}
-          value={time ? `${due} • ${time}` : due}
-          highlight
-        />
-      ) : null}
-      <View style={styles.pillRow}>
-        {priority ? <Pill label={priority.toUpperCase()} color={priorityColor(priority)} /> : null}
-        {data.estimated_minutes ? <Pill label={`~${formatDuration(data.estimated_minutes)}`} /> : null}
-        {data.is_private ? <Pill label="Private" /> : null}
-        {data.project_name ? <Pill label={data.project_name} /> : null}
-      </View>
-      <FollowupHint text='Tip: say "make it high priority" or "give it 30 minutes" to adjust.' />
-    </CardShell>
   );
 }
 
@@ -499,7 +404,7 @@ function ResourcesCard({message, data}: {message: string; data: any}) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Weather / Time / Search                                                     */
+/* Weather / Time                                                              */
 /* -------------------------------------------------------------------------- */
 
 function WeatherCard({message, data}: {message: string; data: any}) {
@@ -522,17 +427,6 @@ function TimeCard({message, data}: {message: string; data: any}) {
       eyebrow={`TIME • ${data.location || ''}`}
       title={data.formatted || ''}>
       {message ? <MarkdownText style={styles.cardMessage}>{message}</MarkdownText> : null}
-    </CardShell>
-  );
-}
-
-function SearchCard({message, data}: {message: string; data: any}) {
-  return (
-    <CardShell
-      rail={RAIL.search}
-      icon={<Search size={14} color={RAIL.search} />}
-      eyebrow="WEB SEARCH">
-      <MarkdownText style={styles.cardMessage}>{message}</MarkdownText>
     </CardShell>
   );
 }
@@ -567,21 +461,6 @@ function formatDuration(minutes: number | undefined | null): string {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return mins ? `${hours}h ${mins}m` : `${hours}h`;
-}
-
-function priorityColor(p: string): string {
-  switch (p.toLowerCase()) {
-    case 'urgent':
-      return theme.colors.priorityUrgent;
-    case 'high':
-      return theme.colors.priorityHigh;
-    case 'medium':
-      return theme.colors.priorityMedium;
-    case 'low':
-      return theme.colors.priorityLow;
-    default:
-      return theme.colors.priorityMedium;
-  }
 }
 
 /** Convert a hex color to rgba with a given alpha. Accepts colors that already include alpha. */

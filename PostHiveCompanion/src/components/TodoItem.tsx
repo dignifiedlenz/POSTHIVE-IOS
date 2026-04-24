@@ -1,6 +1,6 @@
 import React, {useRef, useEffect, useState} from 'react';
 import {View, Text, StyleSheet, TouchableOpacity, Animated, Pressable} from 'react-native';
-import {Check, Clock, Folder} from 'lucide-react-native';
+import {Check, Folder} from 'lucide-react-native';
 import {formatDistanceToNow, isPast, parseISO} from 'date-fns';
 import {theme} from '../theme';
 import {Todo} from '../lib/types';
@@ -284,7 +284,6 @@ export function TodoItem({
     <Animated.View
       style={[
         styles.container,
-        isAssigned && styles.containerAssigned,
         {
           transform: [
             {scale: Animated.multiply(scaleAnim, bounceAnim)},
@@ -295,120 +294,111 @@ export function TodoItem({
       ]}>
       {/* Glow effect on completion */}
       <Animated.View
-        style={[
-          styles.glowOverlay,
-          {opacity: glowOpacity},
-        ]}
+        style={[styles.glowOverlay, {opacity: glowOpacity}]}
         pointerEvents="none"
       />
-      
-      <View style={styles.row}>
-        {/* Smaller Checkbox */}
-        <TouchableOpacity
-          style={styles.checkboxContainer}
-          onPress={onToggleStatus}
-          hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
-          disabled={isCompleting}
-          activeOpacity={0.7}>
-          <Animated.View
-            style={[
-              styles.checkbox,
-              (isCompleted || isCompleting) && styles.checkboxCompleted,
-              isOverdue && !isCompleted && styles.checkboxOverdue,
-              {
-                transform: [
-                  {scale: checkboxCollapseAnim},
-                ],
-              },
-            ]}>
-            <Animated.View
-              style={{
-                transform: [
-                  {scale: checkScaleAnim},
-                  {rotate: checkRotation},
-                ],
-              }}>
-              <Check
-                size={12}
-                color={isCompleted || isCompleting ? '#4ade80' : 'transparent'}
-                strokeWidth={2.5}
-              />
-            </Animated.View>
-          </Animated.View>
-        </TouchableOpacity>
 
-        {/* Content - no card styling */}
-        <Pressable 
-          style={styles.content} 
-          onPress={onPress}
-          android_ripple={{color: 'rgba(255,255,255,0.05)'}}>
-          <View style={styles.mainContent}>
-            {/* Title and time row */}
-            <View style={styles.titleRow}>
-              <View style={styles.titleContainer}>
-                <Text
-                  style={[
-                    styles.title,
-                    isAssigned && !isCompleted && styles.titleAssigned,
-                    (isCompleted || isCompleting) && styles.titleCompleted,
-                    isOverdue && !isCompleted && styles.titleOverdue,
-                  ]}
-                  numberOfLines={1}
-                  onLayout={(e) => {
-                    if (!titleWidth) {
-                      setTitleWidth(e.nativeEvent.layout.width);
-                    }
-                  }}>
-                  {capitalizeFirst(todo.title)}
-                </Text>
-                {/* Animated green strikethrough line */}
-                {(isCompleting || isCompleted) && titleWidth > 0 && (
-                  <Animated.View
+      <View style={[styles.pill, isAssigned && styles.pillAssigned]}>
+        <View style={styles.row}>
+          <TouchableOpacity
+            style={styles.checkboxContainer}
+            onPress={onToggleStatus}
+            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+            disabled={isCompleting}
+            activeOpacity={0.7}>
+            <Animated.View
+              style={[
+                styles.checkbox,
+                (isCompleted || isCompleting) && styles.checkboxCompleted,
+                isOverdue && !isCompleted && styles.checkboxOverdue,
+                {
+                  transform: [{scale: checkboxCollapseAnim}],
+                },
+              ]}>
+              <Animated.View
+                style={{
+                  transform: [{scale: checkScaleAnim}, {rotate: checkRotation}],
+                }}>
+                <Check
+                  size={11}
+                  color={isCompleted || isCompleting ? '#4ade80' : 'transparent'}
+                  strokeWidth={2.2}
+                />
+              </Animated.View>
+            </Animated.View>
+          </TouchableOpacity>
+
+          <Pressable
+            style={styles.content}
+            onPress={onPress}
+            android_ripple={{color: 'rgba(255,255,255,0.06)'}}>
+            <View style={styles.mainContent}>
+              {/* Title and time row */}
+              <View style={styles.titleRow}>
+                <View style={styles.titleContainer}>
+                  <Text
                     style={[
-                      styles.strikethroughLine,
-                      {
-                        width: strikethroughWidthAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0, titleWidth],
-                        }),
-                        opacity: strikethroughAnim,
-                      },
+                      styles.title,
+                      isAssigned && !isCompleted && styles.titleAssigned,
+                      (isCompleted || isCompleting) && styles.titleCompleted,
+                      isOverdue && !isCompleted && styles.titleOverdue,
                     ]}
-                  />
+                    numberOfLines={1}
+                    onLayout={(e) => {
+                      if (!titleWidth) {
+                        setTitleWidth(e.nativeEvent.layout.width);
+                      }
+                    }}>
+                    {capitalizeFirst(todo.title)}
+                  </Text>
+                  {(isCompleting || isCompleted) && titleWidth > 0 && (
+                    <Animated.View
+                      style={[
+                        styles.strikethroughLine,
+                        {
+                          width: strikethroughWidthAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0, titleWidth],
+                          }),
+                          opacity: strikethroughAnim,
+                        },
+                      ]}
+                    />
+                  )}
+                </View>
+                {timeRemaining && (
+                  <Text
+                    style={[
+                      styles.timeText,
+                      isOverdue && !isCompleted && styles.timeTextOverdue,
+                    ]}>
+                    {timeRemaining}
+                  </Text>
+                )}
+                {assignedInitials && (
+                  <View
+                    style={styles.assigneeBadge}
+                    accessible
+                    accessibilityRole="image"
+                    accessibilityLabel={`Assigned to ${todo.assigned_name ?? assignedInitials}`}>
+                    <Text style={styles.assigneeBadgeText}>{assignedInitials}</Text>
+                  </View>
                 )}
               </View>
-              {timeRemaining && (
-                <Text style={[
-                  styles.timeText,
-                  isOverdue && !isCompleted && styles.timeTextOverdue,
-                ]}>
-                  {timeRemaining}
-                </Text>
-              )}
-              {assignedInitials && (
-                <View
-                  style={styles.assigneeBadge}
-                  accessible
-                  accessibilityRole="image"
-                  accessibilityLabel={`Assigned to ${todo.assigned_name ?? assignedInitials}`}>
-                  <Text style={styles.assigneeBadgeText}>{assignedInitials}</Text>
+
+              {todo.project_name && (
+                <View style={styles.metaRow}>
+                  <View style={styles.metaItem}>
+                    <Folder size={11} color={theme.colors.textMuted} />
+                    <Text style={styles.metaText} numberOfLines={1}>
+                      {todo.project_name}
+                    </Text>
+                  </View>
                 </View>
               )}
             </View>
-            
-            {/* Meta row with project */}
-            {todo.project_name && (
-              <View style={styles.metaRow}>
-                <View style={styles.metaItem}>
-                  <Folder size={11} color={theme.colors.textMuted} />
-                  <Text style={styles.metaText} numberOfLines={1}>
-                    {todo.project_name}
-                  </Text>
-                </View>
-              </View>
-            )}
-          </View>
-        </Pressable>
+          </Pressable>
+        </View>
       </View>
     </Animated.View>
   );
@@ -416,45 +406,54 @@ export function TodoItem({
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 6,
+    marginBottom: 10,
     position: 'relative',
+    borderRadius: 999,
+    overflow: 'hidden',
   },
-  containerAssigned: {
-    backgroundColor: 'rgba(59, 130, 246, 0.08)',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    borderLeftWidth: 2,
-    borderLeftColor: 'rgba(96, 165, 250, 0.55)',
+  pill: {
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+    paddingVertical: 12,
+    paddingLeft: 14,
+    paddingRight: 16,
+  },
+  pillAssigned: {
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    borderColor: 'rgba(147, 197, 253, 0.22)',
   },
   glowOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#4ade80',
-    borderRadius: 0,
+    borderRadius: 999,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingVertical: 6,
+    gap: 14,
   },
   checkboxContainer: {
-    justifyContent: 'flex-start',
-    alignItems: 'flex-start',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   checkbox: {
-    width: 22,
-    height: 22,
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.38)',
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'transparent',
   },
   checkboxCompleted: {
     borderColor: '#4ade80',
-    backgroundColor: 'rgba(74, 222, 128, 0.1)',
+    backgroundColor: 'rgba(74, 222, 128, 0.08)',
   },
   checkboxOverdue: {
-    borderColor: 'rgba(248, 113, 113, 0.4)',
+    borderColor: 'rgba(248, 113, 113, 0.55)',
   },
   content: {
     flex: 1,
@@ -476,26 +475,27 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   title: {
-    color: theme.colors.textPrimary,
-    fontSize: 15,
+    color: theme.colors.textSecondary,
+    fontSize: 13,
     fontFamily: theme.typography.fontFamily.regular,
-    lineHeight: 22,
+    lineHeight: 18,
+    fontWeight: '400',
   },
   strikethroughLine: {
     position: 'absolute',
     left: 0,
-    top: 11,
+    top: 8,
     height: 2,
     backgroundColor: '#4ade80',
     borderRadius: 1,
   },
   titleAssigned: {
-    fontFamily: theme.typography.fontFamily.semibold,
-    fontWeight: '600',
+    fontFamily: theme.typography.fontFamily.medium,
+    fontWeight: '500',
   },
   timeText: {
     color: theme.colors.textMuted,
-    fontSize: 13,
+    fontSize: 11,
     fontFamily: theme.typography.fontFamily.regular,
     flexShrink: 0,
   },
