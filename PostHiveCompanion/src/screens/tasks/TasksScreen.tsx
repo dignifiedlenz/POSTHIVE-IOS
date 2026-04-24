@@ -7,11 +7,9 @@ import {
   ScrollView,
   RefreshControl,
   TouchableOpacity,
-  ActivityIndicator,
   Alert,
   Modal,
   Animated,
-  Platform,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
@@ -25,13 +23,7 @@ import {
   ChevronRight,
   Check,
   X,
-  Clock,
-  Flag,
-  Folder,
-  Edit2,
-  Save,
 } from 'lucide-react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import {
   format,
   startOfMonth,
@@ -51,11 +43,10 @@ import {useAuth} from '../../hooks/useAuth';
 import {useTodos} from '../../hooks/useTodos';
 import {TodoItem} from '../../components/TodoItem';
 import {VoiceCommandModal} from '../../components/VoiceCommandModal';
-import {Input, Button} from '../../components/ui';
-import {updateTodo} from '../../lib/api';
-import type {Todo, TodoPriority} from '../../lib/types';
+import {Button} from '../../components/ui';
+import {TaskDetailsModal} from '../../components/TaskDetailsModal';
+import type {Todo} from '../../lib/types';
 import {DashboardStackParamList} from '../../app/App';
-import {capitalizeFirst} from '../../lib/utils';
 
 type NavigationProp = StackNavigationProp<DashboardStackParamList>;
 
@@ -67,13 +58,6 @@ const TABS: {key: ViewTab; label: string; icon: typeof List}[] = [
 ];
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-const PRIORITIES: {key: TodoPriority; label: string; color: string}[] = [
-  {key: 'low', label: 'Low', color: theme.colors.priorityLow},
-  {key: 'medium', label: 'Medium', color: theme.colors.priorityMedium},
-  {key: 'high', label: 'High', color: theme.colors.priorityHigh},
-  {key: 'urgent', label: 'Urgent', color: theme.colors.priorityUrgent},
-];
 
 // Celebration Modal - matches WelcomeScreen style
 interface CelebrationModalProps {
@@ -230,369 +214,9 @@ function CelebrationModal({visible, onDismiss}: CelebrationModalProps) {
   );
 }
 
-// Task Details Modal
-interface TaskDetailsModalProps {
-  visible: boolean;
-  todo: Todo | null;
-  onClose: () => void;
-  onToggleStatus: (todo: Todo) => void;
-  onUpdate?: () => void;
-}
-
-function TaskDetailsModal({visible, todo, onClose, onToggleStatus, onUpdate}: TaskDetailsModalProps) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [priority, setPriority] = useState<TodoPriority>('medium');
-  const [dueDate, setDueDate] = useState<Date | null>(null);
-  const [dueTime, setDueTime] = useState<Date | null>(null);
-  const [estimatedMinutes, setEstimatedMinutes] = useState('');
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
-
-  // Initialize form data when todo changes
-  useEffect(() => {
-    if (todo) {
-      setTitle(capitalizeFirst(todo.title));
-      setDescription(todo.description || '');
-      setPriority(todo.priority);
-      setDueDate(todo.due_date ? new Date(todo.due_date) : null);
-      setDueTime(todo.due_time ? new Date(`2000-01-01T${todo.due_time}`) : null);
-      setEstimatedMinutes(todo.estimated_minutes?.toString() || '');
-      setIsEditing(false);
-    }
-  }, [todo]);
-
-  const handleComplete = () => {
-    if (todo) {
-      onToggleStatus(todo);
-      onClose();
-    }
-  };
-
-  const handleSave = async () => {
-    if (!todo || !title.trim()) {
-      Alert.alert('Error', 'Please enter a task title');
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      await updateTodo(todo.id, {
-        title: capitalizeFirst(title.trim()),
-        description: description.trim() || undefined,
-        priority,
-        due_date: dueDate ? format(dueDate, 'yyyy-MM-dd') : undefined,
-        due_time: dueTime ? format(dueTime, 'HH:mm:ss') : undefined,
-        estimated_minutes: estimatedMinutes ? parseInt(estimatedMinutes, 10) : undefined,
-      });
-      setIsEditing(false);
-      onUpdate?.(); // Refresh the todo list
-      Alert.alert('Success', 'Task updated');
-    } catch (err) {
-      Alert.alert('Error', 'Failed to update task. Please try again.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDateChange = (event: any, selectedDate?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowDatePicker(false);
-    }
-    if (selectedDate) {
-      setDueDate(selectedDate);
-    }
-  };
-
-  const handleTimeChange = (event: any, selectedTime?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowTimePicker(false);
-    }
-    if (selectedTime) {
-      setDueTime(selectedTime);
-    }
-  };
-
-  if (!todo) return null;
-
-  const isCompleted = todo.status === 'completed';
-  const priorityInfo = PRIORITIES.find(p => p.key === priority) || PRIORITIES[1];
-
-  return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}>
-      <View style={styles.detailsContainer}>
-        {/* Header */}
-        <View style={styles.detailsHeader}>
-          <TouchableOpacity onPress={onClose} style={styles.detailsCloseButton}>
-            <X size={24} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
-          <Text style={styles.detailsHeaderTitle}>Task Details</Text>
-          {!isEditing ? (
-            <TouchableOpacity onPress={() => setIsEditing(true)} style={styles.detailsEditButton}>
-              <Edit2 size={20} color={theme.colors.accent} />
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity onPress={handleSave} style={styles.detailsEditButton} disabled={isSaving}>
-              {isSaving ? (
-                <ActivityIndicator size="small" color={theme.colors.accent} />
-              ) : (
-                <Save size={20} color={theme.colors.accent} />
-              )}
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <ScrollView style={styles.detailsContent} contentContainerStyle={styles.detailsContentContainer}>
-          {/* Title */}
-          <View style={styles.detailsField}>
-            <Text style={styles.detailsLabel}>TITLE</Text>
-            {isEditing ? (
-              <Input
-                value={title}
-                onChangeText={setTitle}
-                placeholder="Task title"
-                style={styles.editInput}
-              />
-            ) : (
-              <Text style={styles.detailsValue}>{capitalizeFirst(todo.title)}</Text>
-            )}
-          </View>
-
-          {/* Description */}
-          <View style={styles.detailsField}>
-            <Text style={styles.detailsLabel}>DESCRIPTION</Text>
-            {isEditing ? (
-              <Input
-                value={description}
-                onChangeText={setDescription}
-                placeholder="Add description..."
-                multiline
-                numberOfLines={3}
-                style={styles.editInput}
-              />
-            ) : (
-              <Text style={styles.detailsValue}>{todo.description || 'No description'}</Text>
-            )}
-          </View>
-
-          {/* Priority */}
-          <View style={styles.detailsField}>
-            <Text style={styles.detailsLabel}>
-              <Flag size={12} color={theme.colors.textMuted} /> PRIORITY
-            </Text>
-            {isEditing ? (
-              <View style={styles.priorityContainer}>
-                {PRIORITIES.map(p => (
-                  <TouchableOpacity
-                    key={p.key}
-                    style={[
-                      styles.priorityButton,
-                      priority === p.key && {
-                        backgroundColor: p.color + '20',
-                        borderColor: p.color,
-                      },
-                    ]}
-                    onPress={() => setPriority(p.key)}>
-                    <View style={[styles.priorityDot, {backgroundColor: p.color}]} />
-                    <Text style={[
-                      styles.priorityText,
-                      priority === p.key && {color: p.color},
-                    ]}>
-                      {p.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : (
-              <View style={styles.priorityDisplay}>
-                <View style={[styles.priorityDot, {backgroundColor: priorityInfo.color}]} />
-                <Text style={styles.detailsValue}>{priorityInfo.label}</Text>
-              </View>
-            )}
-          </View>
-
-          {/* Estimated Time */}
-          <View style={styles.detailsField}>
-            <Text style={styles.detailsLabel}>
-              <Clock size={12} color={theme.colors.textMuted} /> ESTIMATED TIME
-            </Text>
-            {isEditing ? (
-              <Input
-                value={estimatedMinutes}
-                onChangeText={text => setEstimatedMinutes(text.replace(/[^0-9]/g, ''))}
-                placeholder="Minutes (optional)"
-                keyboardType="numeric"
-                style={styles.editInput}
-              />
-            ) : (
-              <TouchableOpacity
-                style={styles.dateButton}
-                onPress={() => setIsEditing(true)}>
-                <Clock size={20} color={theme.colors.textMuted} />
-                <Text style={styles.dateText}>
-                  {todo.estimated_minutes ? `${todo.estimated_minutes} minutes` : 'Tap to set (optional)'}
-                </Text>
-                {estimatedMinutes && (
-                  <TouchableOpacity
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      setEstimatedMinutes('');
-                    }}
-                    hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                    <X size={18} color={theme.colors.textMuted} />
-                  </TouchableOpacity>
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Due Date */}
-          <View style={styles.detailsField}>
-            <Text style={styles.detailsLabel}>
-              <Clock size={12} color={theme.colors.textMuted} /> DUE DATE
-            </Text>
-            <TouchableOpacity
-              style={styles.dateButton}
-              onPress={() => {
-                setIsEditing(true);
-                setShowDatePicker(true);
-              }}>
-              <Calendar size={20} color={theme.colors.textMuted} />
-              <Text style={styles.dateText}>
-                {dueDate ? format(dueDate, 'MMM d, yyyy') : 'Select date (optional)'}
-              </Text>
-              {dueDate && (
-                <TouchableOpacity
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    setDueDate(null);
-                    setDueTime(null);
-                  }}
-                  hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                  <X size={18} color={theme.colors.textMuted} />
-                </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-            {dueDate && (
-              <TouchableOpacity
-                style={[styles.dateButton, {marginTop: 8}]}
-                onPress={() => {
-                  setIsEditing(true);
-                  setShowTimePicker(true);
-                }}>
-                <Clock size={20} color={theme.colors.textMuted} />
-                <Text style={styles.dateText}>
-                  {dueTime ? format(dueTime, 'h:mm a') : 'Select time (optional)'}
-                </Text>
-                {dueTime && (
-                  <TouchableOpacity
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      setDueTime(null);
-                    }}
-                    hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                    <X size={18} color={theme.colors.textMuted} />
-                  </TouchableOpacity>
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Status */}
-          <View style={styles.detailsField}>
-            <Text style={styles.detailsLabel}>STATUS</Text>
-            <View style={[styles.statusBadge, isCompleted && styles.statusBadgeCompleted]}>
-              <Text style={[styles.statusText, isCompleted && styles.statusTextCompleted]}>
-                {isCompleted ? 'Completed' : todo.status === 'in_progress' ? 'In Progress' : 'Pending'}
-              </Text>
-            </View>
-          </View>
-
-          {/* Project */}
-          {todo.project_name && (
-            <View style={styles.detailsField}>
-              <Text style={styles.detailsLabel}>
-                <Folder size={12} color={theme.colors.textMuted} /> PROJECT
-              </Text>
-              <Text style={styles.detailsValue}>{todo.project_name}</Text>
-            </View>
-          )}
-
-          {/* Date/Time Pickers */}
-          {showDatePicker && (
-            <View style={styles.pickerContainer}>
-              {Platform.OS === 'ios' && (
-                <View style={styles.pickerHeader}>
-                  <Text style={styles.pickerTitle}>Due Date</Text>
-                  <TouchableOpacity 
-                    style={styles.pickerDoneButton}
-                    onPress={() => setShowDatePicker(false)}>
-                    <Text style={styles.pickerDoneText}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-              <DateTimePicker
-                value={dueDate || new Date()}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={handleDateChange}
-                themeVariant="dark"
-                style={Platform.OS === 'ios' ? styles.picker : undefined}
-              />
-            </View>
-          )}
-
-          {showTimePicker && (
-            <View style={styles.pickerContainer}>
-              {Platform.OS === 'ios' && (
-                <View style={styles.pickerHeader}>
-                  <Text style={styles.pickerTitle}>Due Time</Text>
-                  <TouchableOpacity 
-                    style={styles.pickerDoneButton}
-                    onPress={() => setShowTimePicker(false)}>
-                    <Text style={styles.pickerDoneText}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-              <DateTimePicker
-                value={dueTime || new Date()}
-                mode="time"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={handleTimeChange}
-                themeVariant="dark"
-                style={Platform.OS === 'ios' ? styles.picker : undefined}
-              />
-            </View>
-          )}
-
-          {/* Complete/Uncomplete button */}
-          {!isEditing && (
-            <TouchableOpacity
-              style={[
-                styles.completeButton,
-                isCompleted && styles.uncompleteButton,
-              ]}
-              onPress={handleComplete}>
-              <Check size={20} color={isCompleted ? theme.colors.textPrimary : theme.colors.accentText} />
-              <Text style={[
-                styles.completeButtonText,
-                isCompleted && styles.uncompleteButtonText,
-              ]}>
-                {isCompleted ? 'Mark as Incomplete' : 'Mark as Complete'}
-              </Text>
-            </TouchableOpacity>
-          )}
-        </ScrollView>
-      </View>
-    </Modal>
-  );
-}
+// Task Details Modal lives in src/components/TaskDetailsModal.tsx so the
+// dashboard quick-edit modal and this screen share the same on-brand chrome
+// and feature set (assignee + linked-deliverable pickers).
 
 export function TasksScreen() {
   const navigation = useNavigation<NavigationProp>();
@@ -1514,5 +1138,172 @@ const styles = StyleSheet.create({
   },
   uncompleteButtonText: {
     color: theme.colors.textPrimary,
+  },
+  // Brand: editorial header for the task modal
+  detailsHeaderTitleWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing.sm,
+  },
+  detailsHeaderEyebrow: {
+    color: theme.colors.textMuted,
+    fontSize: 9,
+    letterSpacing: 2.5,
+    textTransform: 'uppercase',
+    fontFamily: theme.typography.fontFamily.semibold,
+    marginBottom: 2,
+  },
+  detailsHeaderTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: 22,
+    lineHeight: 24,
+    fontFamily: theme.typography.fontFamily.serifItalic,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    maxWidth: '100%',
+  },
+  // Linked rows (assignee + deliverable)
+  linkedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 12,
+    marginTop: theme.spacing.xs,
+  },
+  linkedAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(96, 165, 250, 0.18)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(147, 197, 253, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  linkedAvatarEmpty: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  linkedAvatarText: {
+    color: '#dbeafe',
+    fontSize: 12,
+    fontFamily: theme.typography.fontFamily.bold,
+    letterSpacing: 0.4,
+  },
+  linkedThumb: {
+    width: 44,
+    height: 28,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  linkedTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  linkedTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.md,
+    fontFamily: theme.typography.fontFamily.semibold,
+  },
+  linkedSubtitle: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.fontSize.xs,
+    marginTop: 2,
+  },
+  // Stacked picker sheet
+  pickerSheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    justifyContent: 'flex-end',
+  },
+  pickerSheetDismissArea: {
+    flex: 1,
+  },
+  pickerSheetCard: {
+    backgroundColor: '#0a0a0a',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    maxHeight: '70%',
+    paddingTop: 8,
+  },
+  pickerSheetHandle: {
+    alignSelf: 'center',
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    marginBottom: 8,
+  },
+  pickerSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  pickerSheetEyebrow: {
+    color: theme.colors.textMuted,
+    fontSize: 9,
+    letterSpacing: 2.5,
+    textTransform: 'uppercase',
+    fontFamily: theme.typography.fontFamily.semibold,
+    marginRight: 8,
+  },
+  pickerSheetTitle: {
+    flex: 1,
+    color: theme.colors.textPrimary,
+    fontSize: 18,
+    fontFamily: theme.typography.fontFamily.serifItalic,
+    fontStyle: 'italic',
+  },
+  pickerSheetClose: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pickerSheetScroll: {
+    paddingHorizontal: theme.spacing.md,
+    paddingTop: theme.spacing.sm,
+  },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+  },
+  pickerRowTitle: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.md,
+    fontFamily: theme.typography.fontFamily.semibold,
+    flex: 1,
+  },
+  pickerRowSubtitle: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.fontSize.xs,
+    marginTop: 2,
+  },
+  pickerEmpty: {
+    color: theme.colors.textMuted,
+    fontSize: theme.typography.fontSize.sm,
+    textAlign: 'center',
+    paddingVertical: 24,
   },
 });

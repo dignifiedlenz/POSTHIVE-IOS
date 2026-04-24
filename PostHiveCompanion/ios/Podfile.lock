@@ -3302,7 +3302,7 @@ PODS:
     - RNWorklets
     - SocketRocket
     - Yoga
-  - RNScreens (4.19.0):
+  - RNScreens (4.24.0):
     - boost
     - DoubleConversion
     - fast_float
@@ -3329,10 +3329,10 @@ PODS:
     - ReactCodegen
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
-    - RNScreens/common (= 4.19.0)
+    - RNScreens/common (= 4.24.0)
     - SocketRocket
     - Yoga
-  - RNScreens/common (4.19.0):
+  - RNScreens/common (4.24.0):
     - boost
     - DoubleConversion
     - fast_float
@@ -3990,7 +3990,7 @@ SPEC CHECKSUMS:
   RNKeychain: 182d986f809280edd9444a557adc21845f7d1e6f
   RNNotifee: 4a6ee5c7deaf00e005050052d73ee6315dff7ec9
   RNReanimated: 5abb5bc513057020575ecfb5719f4dfdb356b147
-  RNScreens: 69f68c95d395bc4261d27c3aae7b4a458b947b7e
+  RNScreens: 7179cc1ba31b4e18ed29f10abf20c24a7961cf4c
   RNSVG: 55fc5dc0eaa36a875ffb7d05c0f2cd5b2cbfc342
   RNWorklets: 79252e2fa12db14970f4e881168ce82a4d1fe823
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
@@ -3998,6 +3998,6 @@ SPEC CHECKSUMS:
   TSBackgroundFetch: 0afbeaae4e1132866e1d4b6e55265af26b5958ae
   Yoga: 6ca93c8c13f56baeec55eb608577619b17a4d64e
 
-PODFILE CHECKSUM: a9c743fffd600fc39cdf4f520afb3132f0dfccd3
+PODFILE CHECKSUM: ca4d78dc07ade11c3385ba1c1a4e1bdab48472e8
 
 COCOAPODS: 1.16.2

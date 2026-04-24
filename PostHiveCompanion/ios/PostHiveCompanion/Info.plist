@@ -39,6 +39,10 @@
 	<string>PostHive needs access to your microphone to record audio commands and create tasks using voice input.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>PostHive needs access to save videos and images to your photo library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>PostHive needs access to your photo library to attach images and videos to your tasks and posts.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>PostHive needs access to your camera to capture photos and videos for your tasks and posts.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>PostHive needs access to speech recognition to create tasks and events using voice commands.</string>
 	<key>NSSupportsLiveActivities</key>

@@ -1,4 +1,4 @@
-import React, {useState, useCallback, useRef, useEffect, useMemo} from 'react';
+import React, {useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo} from 'react';
 import {
   View,
   Text,
@@ -70,6 +70,7 @@ export function AssistantChatScreen() {
     consumePendingVoiceCommand,
   } = useTabBar();
   const isListening = voiceState.isListening;
+  const prevListeningRef = useRef(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -176,6 +177,18 @@ export function AssistantChatScreen() {
 
   submitRef.current = submit;
 
+  // After release, copy the final transcript into `input` before paint so the field doesn't
+  // flash empty while we wait for `pendingVoiceCommand` → `submit`.
+  useLayoutEffect(() => {
+    const was = prevListeningRef.current;
+    prevListeningRef.current = isListening;
+    if (was && !isListening && !voiceState.aborted && voiceState.transcript.trim()) {
+      setInput(voiceState.transcript.trim());
+    }
+  }, [isListening, voiceState.aborted, voiceState.transcript]);
+
+  const composerValue = isListening ? voiceState.transcript : input;
+
   // Auto-submit any committed voice transcript routed to the assistant — whether it came from
   // the assistant's own mic button or from the global FAB.
   useEffect(() => {
@@ -245,10 +258,12 @@ export function AssistantChatScreen() {
         style={styles.input}
         placeholder={placeholder}
         placeholderTextColor={theme.colors.textMuted}
-        value={input}
-        onChangeText={setInput}
+        value={composerValue}
+        onChangeText={t => {
+          if (!isListening) setInput(t);
+        }}
         maxLength={4000}
-        editable={!sending}
+        editable={!sending && !isListening}
         onSubmitEditing={() => void submit(input)}
         blurOnSubmit={false}
         returnKeyType="send"

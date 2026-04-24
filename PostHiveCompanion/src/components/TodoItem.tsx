@@ -386,8 +386,12 @@ export function TodoItem({
                 </Text>
               )}
               {assignedInitials && (
-                <View style={styles.initialsBadge}>
-                  <Text style={styles.initialsText}>{assignedInitials}</Text>
+                <View
+                  style={styles.assigneeBadge}
+                  accessible
+                  accessibilityRole="image"
+                  accessibilityLabel={`Assigned to ${todo.assigned_name ?? assignedInitials}`}>
+                  <Text style={styles.assigneeBadgeText}>{assignedInitials}</Text>
                 </View>
               )}
             </View>
@@ -417,7 +421,10 @@ const styles = StyleSheet.create({
   },
   containerAssigned: {
     backgroundColor: 'rgba(59, 130, 246, 0.08)',
-    borderRadius: 6,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    borderLeftWidth: 2,
+    borderLeftColor: 'rgba(96, 165, 250, 0.55)',
   },
   glowOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -495,16 +502,27 @@ const styles = StyleSheet.create({
   timeTextOverdue: {
     color: '#f87171',
   },
-  initialsBadge: {
+  // Circular avatar-style assignee badge (replaces the old plain-text initials that read as
+  // a stray suffix after "Overdue" / the truncated title in the dashboard task list).
+  assigneeBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 'auto',
+    backgroundColor: 'rgba(96, 165, 250, 0.22)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(147, 197, 253, 0.45)',
+    marginLeft: 4,
+    flexShrink: 0,
   },
-  initialsText: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '600',
+  assigneeBadgeText: {
+    color: '#dbeafe',
+    fontSize: 10,
+    fontWeight: '700',
     fontFamily: theme.typography.fontFamily.semibold,
+    letterSpacing: 0.4,
+    lineHeight: 12,
   },
   titleCompleted: {
     color: '#52525b',

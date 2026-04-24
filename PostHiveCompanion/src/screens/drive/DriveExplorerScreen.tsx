@@ -1034,8 +1034,6 @@ const styles = StyleSheet.create({
   iconButton: {
     width: 40,
     height: 40,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1076,8 +1074,6 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: theme.borderRadius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.03)',
@@ -1110,8 +1106,6 @@ const styles = StyleSheet.create({
     borderRadius: theme.borderRadius.sm,
     overflow: 'hidden',
     backgroundColor: '#111',
-    borderWidth: 1,
-    borderColor: theme.colors.surfaceBorder,
   },
   driveListThumbPlaceholder: {
     flex: 1,

@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 90;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -15,6 +15,8 @@
 		0D5259222F1EF26600B66C3B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0D5259152F1EF26600B66C3B /* Assets.xcassets */; };
 		0D8AD6422F13C2810065B491 /* WidgetModule.m in Sources */ = {isa = PBXBuildFile; fileRef = 0D8AD6402F13C2810065B491 /* WidgetModule.m */; };
 		0D8AD6432F13C2810065B491 /* WidgetModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D8AD6412F13C2810065B491 /* WidgetModule.swift */; };
+		AUDIOSESS00010002 /* AudioSessionModule.m in Sources */ = {isa = PBXBuildFile; fileRef = AUDIOSESS00010001M /* AudioSessionModule.m */; };
+		AUDIOSESS00010003 /* AudioSessionModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUDIOSESS00010001S /* AudioSessionModule.swift */; };
 		0DAA6F3C2EF2B2D700776220 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0DAA6F3B2EF2B2D700776220 /* WidgetKit.framework */; };
 		0DAA6F3E2EF2B2D700776220 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0DAA6F3D2EF2B2D700776220 /* SwiftUI.framework */; };
 		0DAA6F4D2EF2B2D800776220 /* TaskLiveActivityWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 0DAA6F3A2EF2B2D700776220 /* TaskLiveActivityWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -41,9 +43,9 @@
 		BB1100042EF4000000010004 /* AppleNativeCreateGlassMenuManager.m in Sources */ = {isa = PBXBuildFile; fileRef = BB1100042EF4000000010003 /* AppleNativeCreateGlassMenuManager.m */; };
 		BB1100052EF4000000010002 /* AppleNativeGlassSwitch.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB1100052EF4000000010001 /* AppleNativeGlassSwitch.swift */; };
 		BB1100052EF4000000010004 /* AppleNativeGlassSwitchManager.m in Sources */ = {isa = PBXBuildFile; fileRef = BB1100052EF4000000010003 /* AppleNativeGlassSwitchManager.m */; };
+		C19E8F69143EF50460D73B06 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		PHAS00012EF5000000010002 /* PostHiveAuthSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = PHAS00012EF5000000010001 /* PostHiveAuthSession.swift */; };
 		PHAS00012EF5000000010004 /* PostHiveAuthSession.m in Sources */ = {isa = PBXBuildFile; fileRef = PHAS00012EF5000000010003 /* PostHiveAuthSession.m */; };
-		C19E8F69143EF50460D73B06 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		PUSH0001000000000000000001 /* PushNotificationModule.m in Sources */ = {isa = PBXBuildFile; fileRef = PUSH0002000000000000000001 /* PushNotificationModule.m */; };
 /* End PBXBuildFile section */
 
@@ -80,6 +82,8 @@
 		0D8AD63F2F13C2090065B491 /* TaskLiveActivityWidgetExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TaskLiveActivityWidgetExtension.entitlements; sourceTree = "<group>"; };
 		0D8AD6402F13C2810065B491 /* WidgetModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = WidgetModule.m; path = PostHiveCompanion/WidgetModule.m; sourceTree = "<group>"; };
 		0D8AD6412F13C2810065B491 /* WidgetModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WidgetModule.swift; path = PostHiveCompanion/WidgetModule.swift; sourceTree = "<group>"; };
+		AUDIOSESS00010001M /* AudioSessionModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = AudioSessionModule.m; path = PostHiveCompanion/AudioSessionModule.m; sourceTree = "<group>"; };
+		AUDIOSESS00010001S /* AudioSessionModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AudioSessionModule.swift; path = PostHiveCompanion/AudioSessionModule.swift; sourceTree = "<group>"; };
 		0DAA6F3A2EF2B2D700776220 /* TaskLiveActivityWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TaskLiveActivityWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		0DAA6F3B2EF2B2D700776220 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		0DAA6F3D2EF2B2D700776220 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
@@ -113,9 +117,9 @@
 		BB1100052EF4000000010001 /* AppleNativeGlassSwitch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppleNativeGlassSwitch.swift; path = PostHiveCompanion/AppleNativeGlassSwitch.swift; sourceTree = "<group>"; };
 		BB1100052EF4000000010003 /* AppleNativeGlassSwitchManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = AppleNativeGlassSwitchManager.m; path = PostHiveCompanion/AppleNativeGlassSwitchManager.m; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
-		PUSH0002000000000000000001 /* PushNotificationModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = PushNotificationModule.m; path = PostHiveCompanion/PushNotificationModule.m; sourceTree = "<group>"; };
 		PHAS00012EF5000000010001 /* PostHiveAuthSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PostHiveAuthSession.swift; path = PostHiveCompanion/PostHiveAuthSession.swift; sourceTree = "<group>"; };
 		PHAS00012EF5000000010003 /* PostHiveAuthSession.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = PostHiveAuthSession.m; path = PostHiveCompanion/PostHiveAuthSession.m; sourceTree = "<group>"; };
+		PUSH0002000000000000000001 /* PushNotificationModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = PushNotificationModule.m; path = PostHiveCompanion/PushNotificationModule.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -171,6 +175,8 @@
 				A1MILLERBANNERLI00000001 /* MillerBanner-LightItalic.otf */,
 				0D8AD6402F13C2810065B491 /* WidgetModule.m */,
 				0D8AD6412F13C2810065B491 /* WidgetModule.swift */,
+				AUDIOSESS00010001M /* AudioSessionModule.m */,
+				AUDIOSESS00010001S /* AudioSessionModule.swift */,
 				0DAA6F792EF2BE2A00776220 /* LiveActivityModule.m */,
 				0DAA6F772EF2BB9100776220 /* LiveActivityModule.swift */,
 				0DD0520E2EF1F7AF0030E943 /* PostHiveCompanion.entitlements */,
@@ -269,6 +275,8 @@
 			);
 			buildRules = (
 			);
+			dependencies = (
+			);
 			name = TaskLiveActivityWidgetExtension;
 			productName = TaskLiveActivityWidgetExtension;
 			productReference = 0DAA6F3A2EF2B2D700776220 /* TaskLiveActivityWidgetExtension.appex */;
@@ -287,7 +295,7 @@
 				00EEFC60759A1932668264C0 /* [CP] Embed Pods Frameworks */,
 				E235C05ADACE081382539298 /* [CP] Copy Pods Resources */,
 				0DAA6F4E2EF2B2D800776220 /* Embed Foundation Extensions */,
-				0D4FAE112F1873AF003F8BA0 /* Re-sign embedded CocoaPods frameworks */,
+				0D4FAE112F1873AF003F8BA0 /* Re-sign embedded CocoaPods frameworks (DISABLED) */,
 			);
 			buildRules = (
 			);
@@ -324,7 +332,7 @@
 				Base,
 			);
 			mainGroup = 83CBB9F61A601CBA00E9B192;
-			preferredProjectObjectVersion = 90;
+			preferredProjectObjectVersion = 77;
 			productRefGroup = 83CBBA001A601CBA00E9B192 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -359,25 +367,20 @@
 /* Begin PBXShellScriptBuildPhase section */
 		00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */ = {
 			isa = PBXShellScriptBuildPhase;
+			files = (
+			);
 			inputPaths = (
 				"$(SRCROOT)/.xcode.env.local",
 				"$(SRCROOT)/.xcode.env",
 			);
 			name = "Bundle React Native code and images";
 			shellPath = /bin/sh;
-			shellScript = (
-				"set -e",
-				"",
-				"WITH_ENVIRONMENT=\"$REACT_NATIVE_PATH/scripts/xcode/with-environment.sh\"",
-				"REACT_NATIVE_XCODE=\"$REACT_NATIVE_PATH/scripts/react-native-xcode.sh\"",
-				"",
-				"/bin/sh -c \"\\\"$WITH_ENVIRONMENT\\\" \\\"$REACT_NATIVE_XCODE\\\"\"",
-				"",
-				"",
-			);
+			shellScript = "set -e\n\nWITH_ENVIRONMENT=\"$REACT_NATIVE_PATH/scripts/xcode/with-environment.sh\"\nREACT_NATIVE_XCODE=\"$REACT_NATIVE_PATH/scripts/react-native-xcode.sh\"\n\n/bin/sh -c \"\\\"$WITH_ENVIRONMENT\\\" \\\"$REACT_NATIVE_XCODE\\\"\"\n\n\n";
 		};
 		00EEFC60759A1932668264C0 /* [CP] Embed Pods Frameworks */ = {
 			isa = PBXShellScriptBuildPhase;
+			files = (
+			);
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-PostHiveCompanion/Pods-PostHiveCompanion-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
@@ -386,49 +389,22 @@
 				"${PODS_ROOT}/Target Support Files/Pods-PostHiveCompanion/Pods-PostHiveCompanion-frameworks-${CONFIGURATION}-output-files.xcfilelist",
 			);
 			shellPath = /bin/sh;
-			shellScript = (
-				"\"${PODS_ROOT}/Target Support Files/Pods-PostHiveCompanion/Pods-PostHiveCompanion-frameworks.sh\"",
-				"",
-			);
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-PostHiveCompanion/Pods-PostHiveCompanion-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
-		0D4FAE112F1873AF003F8BA0 /* Re-sign embedded CocoaPods frameworks */ = {
+		0D4FAE112F1873AF003F8BA0 /* Re-sign embedded CocoaPods frameworks (DISABLED) */ = {
 			isa = PBXShellScriptBuildPhase;
-			name = "Re-sign embedded CocoaPods frameworks";
-			shellPath = /bin/sh;
-			shellScript = (
-				"# Last step before Xcode seals the app: Hermes/FFmpeg often lack a valid Distribution signature after embed.",
-				"# Do NOT set CODE_SIGN_IDENTITY=Apple Distribution in Build Settings with Automatic signing — Xcode flags a conflict.",
-				"# Run after Embed Foundation Extensions so PlugIns exist. Debug/simulator: no-op.",
-				"set -e",
-				"if [ \"${CONFIGURATION}\" != \"Release\" ] || [ \"${PLATFORM_NAME}\" != \"iphoneos\" ]; then exit 0; fi",
-				"SIGN_ID=\"${EXPANDED_CODE_SIGN_IDENTITY:-}\"",
-				"if [ -z \"$SIGN_ID\" ] || [ \"$SIGN_ID\" = \"-\" ]; then SIGN_ID=\"${CODE_SIGN_IDENTITY:-}\"; fi",
-				"if [ -z \"$SIGN_ID\" ] || [ \"$SIGN_ID\" = \"-\" ]; then SIGN_ID=\"Apple Distribution\"; fi",
-				"FW_DIR=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}\"",
-				"APP=\"${TARGET_BUILD_DIR}/${FULL_PRODUCT_NAME}\"",
-				"if [ -d \"$FW_DIR\" ]; then",
-				"  for fw in \"$FW_DIR\"/*.framework; do",
-				"    if [ -d \"$fw\" ]; then",
-				"      echo \"Re-signing (Release) $fw with: $SIGN_ID\"",
-				"      /usr/bin/codesign --force --sign \"$SIGN_ID\" --preserve-metadata=identifier,entitlements,flags \"$fw\"",
-				"    fi",
-				"  done",
-				"fi",
-				"if [ -d \"$APP/PlugIns\" ]; then",
-				"  for appex in \"$APP/PlugIns\"/*.appex; do",
-				"    if [ -d \"$appex\" ]; then",
-				"      echo \"Re-signing (Release) $appex with: $SIGN_ID\"",
-				"      /usr/bin/codesign --force --sign \"$SIGN_ID\" --preserve-metadata=identifier,entitlements,flags \"$appex\"",
-				"    fi",
-				"  done",
-				"fi",
-				"",
+			files = (
 			);
+			name = "Re-sign embedded CocoaPods frameworks (DISABLED)";
+			shellPath = /bin/sh;
+			shellScript = "# DISABLED: this script previously re-signed embedded frameworks and the widget appex\n# during the *build* using ${CODE_SIGN_IDENTITY}, which resolves to Apple Development\n# during Archive. That broke distribution signatures on Hermes, FFmpeg, the widget,\n# and the parent .app seal. Modern Xcode signs everything correctly on its own; let it.\nexit 0\n";
 		};
 		6918C5D79AE7EF00BF85D730 /* [Expo] Configure project */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
+			files = (
+			);
 			inputPaths = (
 				"$(SRCROOT)/.xcode.env",
 				"$(SRCROOT)/.xcode.env.local",
@@ -440,14 +416,12 @@
 				"$(SRCROOT)/Pods/Target Support Files/Pods-PostHiveCompanion/ExpoModulesProvider.swift",
 			);
 			shellPath = /bin/sh;
-			shellScript = (
-				"# This script configures Expo modules and generates the modules provider file.",
-				"bash -l -c \"./Pods/Target\\ Support\\ Files/Pods-PostHiveCompanion/expo-configure-project.sh\"",
-				"",
-			);
+			shellScript = "# This script configures Expo modules and generates the modules provider file.\nbash -l -c \"./Pods/Target\\ Support\\ Files/Pods-PostHiveCompanion/expo-configure-project.sh\"\n";
 		};
 		C38B50BA6285516D6DCD4F65 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
+			files = (
+			);
 			inputPaths = (
 				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
 				"${PODS_ROOT}/Manifest.lock",
@@ -457,21 +431,13 @@
 				"$(DERIVED_FILE_DIR)/Pods-PostHiveCompanion-checkManifestLockResult.txt",
 			);
 			shellPath = /bin/sh;
-			shellScript = (
-				"diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null",
-				"if [ $? != 0 ] ; then",
-				"    # print error to STDERR",
-				"    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2",
-				"    exit 1",
-				"fi",
-				"# This output is used by Xcode 'outputs' to avoid re-running this script phase.",
-				"echo \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"",
-				"",
-			);
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
 			showEnvVarsInLog = 0;
 		};
 		E235C05ADACE081382539298 /* [CP] Copy Pods Resources */ = {
 			isa = PBXShellScriptBuildPhase;
+			files = (
+			);
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-PostHiveCompanion/Pods-PostHiveCompanion-resources-${CONFIGURATION}-input-files.xcfilelist",
 			);
@@ -480,10 +446,7 @@
 				"${PODS_ROOT}/Target Support Files/Pods-PostHiveCompanion/Pods-PostHiveCompanion-resources-${CONFIGURATION}-output-files.xcfilelist",
 			);
 			shellPath = /bin/sh;
-			shellScript = (
-				"\"${PODS_ROOT}/Target Support Files/Pods-PostHiveCompanion/Pods-PostHiveCompanion-resources.sh\"",
-				"",
-			);
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-PostHiveCompanion/Pods-PostHiveCompanion-resources.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -520,6 +483,8 @@
 				PUSH0001000000000000000001 /* PushNotificationModule.m in Sources */,
 				0D8AD6422F13C2810065B491 /* WidgetModule.m in Sources */,
 				0D8AD6432F13C2810065B491 /* WidgetModule.swift in Sources */,
+				AUDIOSESS00010002 /* AudioSessionModule.m in Sources */,
+				AUDIOSESS00010003 /* AudioSessionModule.swift in Sources */,
 				45E05947107AA526D233B2D7 /* ExpoModulesProvider.swift in Sources */,
 			);
 		};
@@ -534,7 +499,7 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		0DAA6F4F2EF2B2D800776220 /* Debug configuration for PBXNativeTarget "TaskLiveActivityWidgetExtension" */ = {
+		0DAA6F4F2EF2B2D800776220 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -548,7 +513,7 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CODE_SIGN_ENTITLEMENTS = TaskLiveActivityWidgetExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = ZJMC964HL6;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -580,7 +545,7 @@
 			};
 			name = Debug;
 		};
-		0DAA6F502EF2B2D800776220 /* Release configuration for PBXNativeTarget "TaskLiveActivityWidgetExtension" */ = {
+		0DAA6F502EF2B2D800776220 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -595,7 +560,7 @@
 				CODE_SIGN_ENTITLEMENTS = TaskLiveActivityWidgetExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = ZJMC964HL6;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -625,7 +590,7 @@
 			};
 			name = Release;
 		};
-		13B07F941A680F5B00A75B9A /* Debug configuration for PBXNativeTarget "PostHiveCompanion" */ = {
+		13B07F941A680F5B00A75B9A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 3B4392A12AC88292D35C810B /* Pods-PostHiveCompanion.debug.xcconfig */;
 			buildSettings = {
@@ -633,7 +598,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = PostHiveCompanion/PostHiveCompanion.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = ZJMC964HL6;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = PostHiveCompanion/Info.plist;
@@ -661,7 +626,7 @@
 			};
 			name = Debug;
 		};
-		13B07F951A680F5B00A75B9A /* Release configuration for PBXNativeTarget "PostHiveCompanion" */ = {
+		13B07F951A680F5B00A75B9A /* Release */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 5709B34CF0A7D63546082F79 /* Pods-PostHiveCompanion.release.xcconfig */;
 			buildSettings = {
@@ -669,7 +634,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = PostHiveCompanion/PostHiveCompanion.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = ZJMC964HL6;
 				INFOPLIST_FILE = PostHiveCompanion/Info.plist;
@@ -696,7 +661,7 @@
 			};
 			name = Release;
 		};
-		83CBBA201A601CBA00E9B192 /* Debug configuration for PBXProject "PostHiveCompanion" */ = {
+		83CBBA201A601CBA00E9B192 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -772,7 +737,7 @@
 			};
 			name = Debug;
 		};
-		83CBBA211A601CBA00E9B192 /* Release configuration for PBXProject "PostHiveCompanion" */ = {
+		83CBBA211A601CBA00E9B192 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -846,24 +811,24 @@
 		0DAA6F522EF2B2D800776220 /* Build configuration list for PBXNativeTarget "TaskLiveActivityWidgetExtension" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				0DAA6F4F2EF2B2D800776220 /* Debug configuration for PBXNativeTarget "TaskLiveActivityWidgetExtension" */,
-				0DAA6F502EF2B2D800776220 /* Release configuration for PBXNativeTarget "TaskLiveActivityWidgetExtension" */,
+				0DAA6F4F2EF2B2D800776220 /* Debug */,
+				0DAA6F502EF2B2D800776220 /* Release */,
 			);
 			defaultConfigurationName = Release;
 		};
 		13B07F931A680F5B00A75B9A /* Build configuration list for PBXNativeTarget "PostHiveCompanion" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				13B07F941A680F5B00A75B9A /* Debug configuration for PBXNativeTarget "PostHiveCompanion" */,
-				13B07F951A680F5B00A75B9A /* Release configuration for PBXNativeTarget "PostHiveCompanion" */,
+				13B07F941A680F5B00A75B9A /* Debug */,
+				13B07F951A680F5B00A75B9A /* Release */,
 			);
 			defaultConfigurationName = Release;
 		};
 		83CBB9FA1A601CBA00E9B192 /* Build configuration list for PBXProject "PostHiveCompanion" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				83CBBA201A601CBA00E9B192 /* Debug configuration for PBXProject "PostHiveCompanion" */,
-				83CBBA211A601CBA00E9B192 /* Release configuration for PBXProject "PostHiveCompanion" */,
+				83CBBA201A601CBA00E9B192 /* Debug */,
+				83CBBA211A601CBA00E9B192 /* Release */,
 			);
 			defaultConfigurationName = Release;
 		};

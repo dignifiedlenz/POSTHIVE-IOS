@@ -1,6 +1,10 @@
 import React, {createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode} from 'react';
 import {Alert, Platform} from 'react-native';
 import * as Haptics from 'expo-haptics';
+import {
+  prepareIosAudioSessionForRecording,
+  restoreIosAudioSessionForPlayback,
+} from '../lib/iosAudioSession';
 
 let Voice: any = null;
 try {
@@ -49,6 +53,12 @@ interface TabBarContextType {
   pendingVoiceCommand: {text: string; nonce: number} | null;
   /** Mark the current pendingVoiceCommand as consumed. */
   consumePendingVoiceCommand: () => void;
+
+  /**
+   * Re-attach the app's default `Voice` event handlers (FAB + assistant). Call this after any
+   * screen temporarily replaced handlers (e.g. VoiceCommandModal) so press-and-hold voice works.
+   */
+  rebindSharedVoiceListeners: () => void;
 }
 
 const initialVoiceState: VoiceCommandState = {
@@ -69,6 +79,7 @@ const TabBarContext = createContext<TabBarContextType>({
   stopVoiceCapture: async () => {},
   pendingVoiceCommand: null,
   consumePendingVoiceCommand: () => {},
+  rebindSharedVoiceListeners: () => {},
 });
 
 async function safeHaptic(style: 'start' | 'end') {
@@ -124,9 +135,15 @@ export function TabBarProvider({children}: {children: ReactNode}) {
     setPendingVoiceCommand(null);
   }, []);
 
-  // Pick whichever transcript is longer — handles the case where iOS gives us a long partial and
-  // then a shorter "final" segment for the same chunk; we want to keep the most-complete version.
-  const updateTranscript = useCallback((next: string) => {
+  // Partials: always show the latest hypothesis (length can dip briefly while iOS revises).
+  const updatePartialTranscript = useCallback((next: string) => {
+    if (!next) return;
+    transcriptRef.current = next;
+    setVoiceState(prev => ({...prev, transcript: next}));
+  }, []);
+
+  // Final segments: prefer the longer string so a short "final" doesn't wipe a good partial.
+  const updateFinalTranscript = useCallback((next: string) => {
     if (!next) return;
     if (next.length >= transcriptRef.current.length) {
       transcriptRef.current = next;
@@ -144,8 +161,13 @@ export function TabBarProvider({children}: {children: ReactNode}) {
       } catch {
         /* ignore */
       }
-      // Tiny delay so iOS releases the audio session before we re-acquire it.
-      await new Promise(r => setTimeout(r, 60));
+      // Give iOS enough time to fully tear down the prior recognition task and release the
+      // audio session before we re-acquire it. Too short (<150ms) and AVAudioEngine's inputNode
+      // still reports a 0-channel format on the next start, throwing IsFormatSampleRateAndChannelCountValid.
+      await new Promise(r => setTimeout(r, 220));
+      if (!userHoldingRef.current || abortRef.current) return;
+      // Re-prep the session (the native probe waits for the input format to become valid).
+      await prepareIosAudioSessionForRecording();
       if (!userHoldingRef.current || abortRef.current) return;
       await Voice.start('en-US');
     } catch (err) {
@@ -155,16 +177,12 @@ export function TabBarProvider({children}: {children: ReactNode}) {
     }
   }, []);
 
-  // Wire the Voice singleton's listeners exactly once, here in the provider, so the FAB and the
-  // assistant mic can both share the same voice pipeline without overwriting each other's handlers.
-  useEffect(() => {
+  const rebindSharedVoiceListeners = useCallback(() => {
     if (!Voice) return;
     try {
       Voice.onSpeechStart = () => {
         setVoiceState(prev => ({...prev, isListening: true}));
       };
-      // iOS auto-ends the session on silence. While the user is still holding, restart the
-      // recognizer so they can keep talking past the silence-detection timeout.
       Voice.onSpeechEnd = () => {
         if (userHoldingRef.current && !abortRef.current) {
           void restartRecognizer();
@@ -174,21 +192,34 @@ export function TabBarProvider({children}: {children: ReactNode}) {
       };
       Voice.onSpeechPartialResults = (e: {value?: string[]}) => {
         const t = e.value?.[0] ?? '';
-        updateTranscript(t);
+        updatePartialTranscript(t);
       };
-      // We do NOT commit here — committing on `onSpeechResults` would fire mid-utterance every
-      // time iOS finalizes a segment. We just absorb the text into the running transcript.
       Voice.onSpeechResults = (e: {value?: string[]}) => {
         const t = e.value?.[0] ?? '';
-        updateTranscript(t);
+        updateFinalTranscript(t);
       };
       Voice.onSpeechError = (e: {error?: {code?: string; message?: string}}) => {
-        // code "7" = no match / silence; iOS recovers by ending the session, which onSpeechEnd
-        // already restarts when the user is still holding. Don't surface or stop on this case.
+        const msg = e.error?.message ?? '';
+        const msgLower = msg.toLowerCase();
+        const formatInvalid =
+          e.error?.code === 'start_recording' ||
+          msg.includes('IsFormatSampleRateAndChannelCountValid');
+        // Common after a bad engine start or a quiet moment — same recovery as code 7.
+        const noSpeechDetected =
+          e.error?.code === 'recognition_fail' &&
+          (msg.includes('1110') || msgLower.includes('no speech'));
+        if (formatInvalid && userHoldingRef.current && !abortRef.current) {
+          void restartRecognizer();
+          return;
+        }
         if (e.error?.code === '7' || e.error?.code === '203') {
           if (userHoldingRef.current && !abortRef.current) {
             void restartRecognizer();
           }
+          return;
+        }
+        if (noSpeechDetected && userHoldingRef.current && !abortRef.current) {
+          void restartRecognizer();
           return;
         }
         if (e.error) {
@@ -201,6 +232,12 @@ export function TabBarProvider({children}: {children: ReactNode}) {
     } catch (err) {
       console.warn('Voice listeners failed:', err);
     }
+  }, [restartRecognizer, updatePartialTranscript, updateFinalTranscript]);
+
+  // `@react-native-voice/voice` is a single native singleton — only one JS owner of onSpeech* at a time.
+  // VoiceCommandModal may temporarily replace these; `rebindSharedVoiceListeners` / `startVoiceCapture` restore.
+  useEffect(() => {
+    rebindSharedVoiceListeners();
     return () => {
       try {
         Voice?.destroy?.()
@@ -210,27 +247,61 @@ export function TabBarProvider({children}: {children: ReactNode}) {
         /* ignore */
       }
     };
-  }, [restartRecognizer, updateTranscript]);
+  }, [rebindSharedVoiceListeners]);
 
   const startVoiceCapture = useCallback(async () => {
     if (!Voice) {
       Alert.alert('Voice', 'Voice recognition is not available on this build.');
       return;
     }
-    try {
-      transcriptRef.current = '';
-      abortRef.current = false;
-      userHoldingRef.current = true;
-      setVoiceState({isListening: true, transcript: '', aborted: false});
-      void safeHaptic('start');
+    transcriptRef.current = '';
+    abortRef.current = false;
+    userHoldingRef.current = true;
+    setVoiceState({isListening: true, transcript: '', aborted: false});
+    void safeHaptic('start');
+    rebindSharedVoiceListeners();
+
+    // Reconfigure the shared audio session for recording BEFORE Voice.start(). On iOS, if an
+    // HLS player (dashboard background, music, etc.) has the session in `.playback`, the
+    // recognizer's AVAudioEngine input format is invalid and Voice.start() throws
+    // "IsFormatSampleRateAndChannelCountValid(format)". The native prepare also probes the
+    // input format until it's valid, but iOS can still race on the very first activation, so
+    // we retry Voice.start() once with a longer wait if it throws the format error inline.
+    const tryStart = async (): Promise<void> => {
+      await prepareIosAudioSessionForRecording();
+      if (!userHoldingRef.current || abortRef.current) return;
       await Voice.start('en-US');
-    } catch (err) {
+    };
+
+    try {
+      await tryStart();
+    } catch (err: any) {
+      const msg = String(err?.message ?? err ?? '');
+      const isFormatErr = msg.includes('IsFormatSampleRateAndChannelCountValid');
+      if (isFormatErr && userHoldingRef.current && !abortRef.current) {
+        try {
+          try {
+            await Voice.stop();
+          } catch {
+            /* ignore */
+          }
+          // Wait noticeably longer on the recovery attempt — iOS needs a beat after the failed
+          // engine start to re-publish a valid input format.
+          await new Promise(r => setTimeout(r, 350));
+          if (!userHoldingRef.current || abortRef.current) return;
+          await tryStart();
+          return;
+        } catch (retryErr) {
+          console.error('Voice start retry failed:', retryErr);
+        }
+      }
       userHoldingRef.current = false;
       setVoiceState(prev => ({...prev, isListening: false}));
       console.error('Voice start failed:', err);
+      void restoreIosAudioSessionForPlayback();
       Alert.alert('Voice', 'Could not start listening. Check microphone permission.');
     }
-  }, []);
+  }, [rebindSharedVoiceListeners]);
 
   const stopVoiceCapture = useCallback(
     async (opts: {abort?: boolean} = {}) => {
@@ -243,6 +314,9 @@ export function TabBarProvider({children}: {children: ReactNode}) {
       } catch {
         /* ignore */
       }
+      // Hand the shared audio session back to playback so HLS backgrounds / music keep
+      // working after we release the mic.
+      void restoreIosAudioSessionForPlayback();
       setVoiceState(prev => ({...prev, isListening: false, aborted: abort}));
       if (!abort) {
         // Give the recognizer a brief moment to deliver any final result for the tail of the
@@ -270,6 +344,7 @@ export function TabBarProvider({children}: {children: ReactNode}) {
       stopVoiceCapture,
       pendingVoiceCommand,
       consumePendingVoiceCommand,
+      rebindSharedVoiceListeners,
     }}>
       {children}
     </TabBarContext.Provider>

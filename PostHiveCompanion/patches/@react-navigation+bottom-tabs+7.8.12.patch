@@ -1,0 +1,15 @@
+diff --git a/node_modules/@react-navigation/bottom-tabs/lib/module/unstable/NativeBottomTabView.native.js b/node_modules/@react-navigation/bottom-tabs/lib/module/unstable/NativeBottomTabView.native.js
+index 188a36d..17a0e3a 100644
+--- a/node_modules/@react-navigation/bottom-tabs/lib/module/unstable/NativeBottomTabView.native.js
++++ b/node_modules/@react-navigation/bottom-tabs/lib/module/unstable/NativeBottomTabView.native.js
+@@ -5,7 +5,9 @@ import { CommonActions, StackActions, useTheme } from '@react-navigation/native'
+ import Color from 'color';
+ import * as React from 'react';
+ import { Platform, PlatformColor } from 'react-native';
+-import { BottomTabs, BottomTabsScreen } from 'react-native-screens';
++import { Tabs as _PostHiveTabs } from 'react-native-screens';
++const BottomTabs = _PostHiveTabs.Host;
++const BottomTabsScreen = _PostHiveTabs.Screen;
+ import { NativeScreen } from "./NativeScreen/NativeScreen.js";
+ import { jsx as _jsx } from "react/jsx-runtime";
+ export function NativeBottomTabView({

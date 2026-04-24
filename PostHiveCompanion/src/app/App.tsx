@@ -53,7 +53,6 @@ import {ProjectsScreen} from '../screens/projects/ProjectsScreen';
 import {ProjectDeliverablesScreen} from '../screens/projects/ProjectDeliverablesScreen';
 import {SeriesItemsScreen} from '../screens/series/SeriesItemsScreen';
 import {SeriesListScreen} from '../screens/series/SeriesListScreen';
-import {MenuPlaceholderScreen} from '../screens/menu/MenuPlaceholderScreen';
 import {ProfileScreen} from '../screens/profile/ProfileScreen';
 import {NotificationSettingsScreen} from '../screens/settings/NotificationSettingsScreen';
 import {TransferHistoryScreen} from '../screens/transfer/TransferHistoryScreen';
@@ -100,6 +99,13 @@ export type HomeStackParamList = {
     thumbnailUrl?: string;
     itemCount: number;
   };
+  /** Formerly on the root `Menu` stack — kept on Home so the main tab bar stays visible. */
+  Profile: undefined;
+  NotificationSettings: undefined;
+  TransferHistory: undefined;
+  TransferDetail: {transfer: import('../lib/api').TransferOperation};
+  DriveExplorer: undefined;
+  Notifications: undefined;
 };
 
 export type AssistantStackParamList = {
@@ -143,7 +149,6 @@ export type MainTabParamList = {
 
 export type AuthenticatedRootParamList = {
   MainTabs: NavigatorScreenParams<MainTabParamList> | undefined;
-  Menu: NavigatorScreenParams<MenuStackParamList> | undefined;
   /**
    * DeliverableReview lives at the root level (above the tab navigator) so it presents
    * over the iOS native bottom tab bar. The unstable native bottom tab navigator does not
@@ -168,22 +173,11 @@ export type RecentDeliverablesStackParamList = DeliverablesStackParamList;
  */
 export type ReviewStackParamList = HomeStackParamList;
 
-export type MenuStackParamList = {
-  MenuHome: undefined;
-  Profile: undefined;
-  NotificationSettings: undefined;
-  TransferHistory: undefined;
-  TransferDetail: {transfer: import('../lib/api').TransferOperation};
-  DriveExplorer: undefined;
-  Notifications: undefined;
-};
-
 const HomeStack = createStackNavigator<HomeStackParamList>();
 const AssistantStack = createStackNavigator<AssistantStackParamList>();
 const DeliverablesStack = createStackNavigator<DeliverablesStackParamList>();
 const ProjectsStack = createStackNavigator<ProjectsStackParamList>();
 const CalendarStack = createStackNavigator<CalendarStackParamList>();
-const MenuStack = createStackNavigator<MenuStackParamList>();
 const RootStack = createStackNavigator<AuthenticatedRootParamList>();
 const NativeTab = createNativeBottomTabNavigator<MainTabParamList>();
 const JsTab = createBottomTabNavigator<MainTabParamList>();
@@ -191,31 +185,8 @@ const JsTab = createBottomTabNavigator<MainTabParamList>();
 /** Space below floating top bar (safe area + bar chrome); keep in sync with MainAppTopBar layout */
 const MAIN_FLOATING_TOP_BAR_EXTRA = 64;
 
-function MenuStackChrome({children}: {children: React.ReactNode}) {
-  const insets = useSafeAreaInsets();
-  const bottomScrimHeight = Math.max(insets.bottom, 0) + 110;
-  return (
-    <View style={styles.mainPagerRoot}>
-      <View style={[styles.mainPagerContent, {paddingTop: insets.top + MAIN_FLOATING_TOP_BAR_EXTRA}]}>
-        {children}
-      </View>
-      <LinearGradient
-        pointerEvents="none"
-        colors={[
-          'rgba(0,0,0,0)',
-          'rgba(0,0,0,0.55)',
-          'rgba(0,0,0,0.92)',
-          'rgba(0,0,0,0.96)',
-        ]}
-        locations={[0, 0.55, 0.85, 1]}
-        style={[styles.bottomNavScrim, {height: bottomScrimHeight}]}
-      />
-      <View style={styles.mainPagerTopOverlay} pointerEvents="box-none">
-        <MainAppTopBar />
-      </View>
-    </View>
-  );
-}
+/** Solid stack cards for settings / drive / transfers (avoid transparent bleed over the dashboard). */
+const HOME_OPAQUE_CARD_STYLE = {backgroundColor: theme.colors.background};
 
 function AuthenticatedChrome({children}: {children: React.ReactNode}) {
   const insets = useSafeAreaInsets();
@@ -285,35 +256,51 @@ function CalendarRoot() {
   );
 }
 
-function DriveExplorerRoot() {
+function DriveExplorerHomeRoot() {
   return (
-    <MenuStackChrome>
+    <AuthenticatedChrome>
       <DriveExplorerScreen />
-    </MenuStackChrome>
+    </AuthenticatedChrome>
   );
 }
 
-function TransferHistoryRoot() {
+function TransferHistoryHomeRoot() {
   return (
-    <MenuStackChrome>
+    <AuthenticatedChrome>
       <TransferHistoryScreen />
-    </MenuStackChrome>
+    </AuthenticatedChrome>
   );
 }
 
-function TransferDetailRoot() {
+function TransferDetailHomeRoot() {
   return (
-    <MenuStackChrome>
+    <AuthenticatedChrome>
       <TransferDetailScreen />
-    </MenuStackChrome>
+    </AuthenticatedChrome>
   );
 }
 
-function NotificationsMenuRoot() {
+function NotificationsHomeRoot() {
   return (
-    <MenuStackChrome>
+    <AuthenticatedChrome>
       <NotificationsScreen />
-    </MenuStackChrome>
+    </AuthenticatedChrome>
+  );
+}
+
+function ProfileHomeRoot() {
+  return (
+    <AuthenticatedChrome>
+      <ProfileScreen />
+    </AuthenticatedChrome>
+  );
+}
+
+function NotificationSettingsHomeRoot() {
+  return (
+    <AuthenticatedChrome>
+      <NotificationSettingsScreen />
+    </AuthenticatedChrome>
   );
 }
 
@@ -349,6 +336,36 @@ function HomeStackNavigator() {
       <HomeStack.Screen name="ProjectDeliverables" component={ProjectDeliverablesScreen} />
       <HomeStack.Screen name="SeriesList" component={SeriesListScreen} />
       <HomeStack.Screen name="SeriesItems" component={SeriesItemsScreen} />
+      <HomeStack.Screen
+        name="Profile"
+        component={ProfileHomeRoot}
+        options={{cardStyle: HOME_OPAQUE_CARD_STYLE}}
+      />
+      <HomeStack.Screen
+        name="NotificationSettings"
+        component={NotificationSettingsHomeRoot}
+        options={{cardStyle: HOME_OPAQUE_CARD_STYLE}}
+      />
+      <HomeStack.Screen
+        name="TransferHistory"
+        component={TransferHistoryHomeRoot}
+        options={{cardStyle: HOME_OPAQUE_CARD_STYLE}}
+      />
+      <HomeStack.Screen
+        name="TransferDetail"
+        component={TransferDetailHomeRoot}
+        options={{cardStyle: HOME_OPAQUE_CARD_STYLE}}
+      />
+      <HomeStack.Screen
+        name="DriveExplorer"
+        component={DriveExplorerHomeRoot}
+        options={{cardStyle: HOME_OPAQUE_CARD_STYLE}}
+      />
+      <HomeStack.Screen
+        name="Notifications"
+        component={NotificationsHomeRoot}
+        options={{cardStyle: HOME_OPAQUE_CARD_STYLE}}
+      />
     </HomeStack.Navigator>
   );
 }
@@ -527,39 +544,6 @@ function AndroidMaterialMainTabs() {
   );
 }
 
-function MenuStackNavigator() {
-  return (
-    <MenuStack.Navigator 
-      screenOptions={{
-        headerShown: false,
-        cardStyle: {backgroundColor: 'transparent'},
-      }}>
-      <MenuStack.Screen name="MenuHome" component={MenuPlaceholderScreen} />
-      <MenuStack.Screen name="Profile" component={ProfileScreen} />
-      <MenuStack.Screen
-        name="NotificationSettings"
-        component={NotificationSettingsScreen}
-      />
-      <MenuStack.Screen
-        name="TransferHistory"
-        component={TransferHistoryRoot}
-      />
-      <MenuStack.Screen
-        name="TransferDetail"
-        component={TransferDetailRoot}
-      />
-      <MenuStack.Screen
-        name="DriveExplorer"
-        component={DriveExplorerRoot}
-      />
-      <MenuStack.Screen
-        name="Notifications"
-        component={NotificationsMenuRoot}
-      />
-    </MenuStack.Navigator>
-  );
-}
-
 // Authenticated app wrapper with push notifications
 interface AuthenticatedAppProps {
   userId?: string;
@@ -673,7 +657,10 @@ function AuthenticatedApp({userId, workspaceId}: AuthenticatedAppProps) {
             params: {screen: 'Calendar'},
           });
         } else if (path === 'transfers') {
-          navigationRef.current?.navigate('Menu', {screen: 'TransferHistory'});
+          navigationRef.current?.navigate('MainTabs', {
+            screen: 'Home',
+            params: {screen: 'TransferHistory'},
+          });
         } else {
           handled = false;
         }
@@ -865,7 +852,6 @@ function AuthenticatedRoot() {
         cardStyle: {backgroundColor: 'transparent'},
       }}>
       <RootStack.Screen name="MainTabs" component={MainTabs} />
-      <RootStack.Screen name="Menu" component={MenuStackNavigator} />
       <RootStack.Screen
         name="DeliverableReview"
         component={DeliverableReviewScreen}
@@ -876,6 +862,16 @@ function AuthenticatedRoot() {
 }
 
 function MainTabs() {
+  // iOS uses the SwiftUI-backed "liquid glass" navigator from
+  // `@react-navigation/bottom-tabs/unstable`. As-published it imports
+  // `BottomTabs` / `BottomTabsScreen` from `react-native-screens`, but RNS
+  // 4.24.0 only exposes those under the `Tabs` namespace (`Tabs.Host` /
+  // `Tabs.Screen`), so the imports resolve to `undefined` and the app
+  // red-screens with "Element type is invalid: ... NativeBottomTabView".
+  // We work around that with a local patch in
+  //   patches/@react-navigation+bottom-tabs+*.patch
+  // applied via `patch-package` on postinstall. Drop the patch once RNS
+  // re-exports the flat names (or react-navigation switches to the namespace).
   return (
     <View style={styles.mainTabsWrap}>
       {Platform.OS === 'ios' ? <IOSNativeMainTabs /> : <AndroidMaterialMainTabs />}

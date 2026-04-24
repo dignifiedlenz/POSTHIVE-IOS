@@ -1,0 +1,34 @@
+diff --git a/node_modules/@react-native-voice/voice/ios/Voice/Voice.m b/node_modules/@react-native-voice/voice/ios/Voice/Voice.m
+index fd9dad8..ed96976 100644
+--- a/node_modules/@react-native-voice/voice/ios/Voice/Voice.m
++++ b/node_modules/@react-native-voice/voice/ios/Voice/Voice.m
+@@ -112,12 +112,24 @@ -(void) resetAudioSession {
+     NSString* audioCategory = [self.audioSession category];
+     // Category hasn't changed -- do nothing
+     if ([self.priorAudioCategory isEqualToString:audioCategory]) return;
+-    // Reset back to the previous category
+-    if ([self isHeadsetPluggedIn] || [self isHeadSetBluetooth]) {
+-        [self.audioSession setCategory:self.priorAudioCategory withOptions:AVAudioSessionCategoryOptionAllowBluetooth error: nil];
+-    } else {
+-        [self.audioSession setCategory:self.priorAudioCategory withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker error: nil];
++    if (self.priorAudioCategory == nil || [self.priorAudioCategory length] == 0) {
++        self.audioSession = nil;
++        return;
++    }
++    // Reset back to the previous category. CRITICAL: DefaultToSpeaker and AllowBluetooth are
++    // only valid with PlayAndRecord. Prior category is often Playback (e.g. after
++    // react-native-video) — pairing it with DefaultToSpeaker makes SessionCore log
++    // "defaultToSpeaker is only applicable with category playAndRecord" and leaves the
++    // shared session in a broken state (next Voice start hits IsFormatSampleRateAndChannelCountValid).
++    AVAudioSessionCategoryOptions options = 0;
++    if ([self.priorAudioCategory isEqualToString:AVAudioSessionCategoryPlayAndRecord]) {
++        if ([self isHeadsetPluggedIn] || [self isHeadSetBluetooth]) {
++            options = AVAudioSessionCategoryOptionAllowBluetooth;
++        } else {
++            options = AVAudioSessionCategoryOptionDefaultToSpeaker;
++        }
+     }
++    [self.audioSession setCategory:self.priorAudioCategory withOptions:options error: nil];
+     // Remove pointer reference
+     self.audioSession = nil;
+ }

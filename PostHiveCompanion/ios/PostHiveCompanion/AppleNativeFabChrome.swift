@@ -156,6 +156,10 @@ final class AppleNativeFabChromeView: UIView, UIGestureRecognizerDelegate {
     // Transparent UIButton over the SwiftUI chrome. With `showsMenuAsPrimaryAction = true`
     // a single tap pops the system context menu (Liquid Glass on iOS 26+, regular menu otherwise).
     // The button is invisible — the SwiftUI hosting view underneath is what the user sees.
+    //
+    // Important: per Apple docs, `showsMenuAsPrimaryAction` presents the menu on *touch-down*,
+    // not touch-up. To support press-and-hold-to-talk we therefore can't let the button see the
+    // touch immediately — see the long-press setup below for how we delay touch delivery.
     let btn = UIButton(type: .custom)
     btn.backgroundColor = .clear
     btn.translatesAutoresizingMaskIntoConstraints = false
@@ -170,15 +174,22 @@ final class AppleNativeFabChromeView: UIView, UIGestureRecognizerDelegate {
     ])
     menuButton = btn
 
-    // Long-press lives on the button (not the parent view) so it sits inside the same gesture
-    // arena as UIButton's internal recognizers and can race them. When ours wins (finger held
-    // past `longPressMinDuration`), we cancel the button's tracking so iOS doesn't *also*
-    // open the menu on touch-up.
+    // Long-press lives on the parent view, NOT on the button. Crucially, we set
+    // `delaysTouchesBegan = true` so UIKit buffers the touch and refuses to deliver it to the
+    // button underneath until the gesture either:
+    //   • recognizes (held ≥ longPressMinDuration) → we start voice; button never sees the
+    //     touch, so the system menu does not appear; OR
+    //   • fails (finger lifted before threshold)  → UIKit replays touchesBegan/touchesEnded
+    //     to the button, which fires its primary action and pops the system menu.
+    // This is the only way to win the race against `showsMenuAsPrimaryAction` (which would
+    // otherwise present the menu on the very first touch-down, before any long-press could
+    // possibly fire).
     let lp = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
     lp.minimumPressDuration = longPressMinDuration
     lp.allowableMovement = 140
+    lp.delaysTouchesBegan = true
     lp.delegate = self
-    btn.addGestureRecognizer(lp)
+    addGestureRecognizer(lp)
     longPress = lp
 
     applyInteractionMode()
@@ -232,9 +243,8 @@ final class AppleNativeFabChromeView: UIView, UIGestureRecognizerDelegate {
 
     switch g.state {
     case .began:
-      // Race won — cancel the button's pending tap so iOS does NOT open the menu on touch-up.
-      menuButton?.cancelTracking(with: nil)
-
+      // The long-press has officially won — UIKit will discard the buffered touches, so the
+      // button never sees them and the system menu does not appear. We can safely start voice.
       voiceSessionActive = true
       voiceEndDelivered = false
       voiceLongPressStartY = g.location(in: self).y
@@ -274,8 +284,10 @@ final class AppleNativeFabChromeView: UIView, UIGestureRecognizerDelegate {
 
   // MARK: UIGestureRecognizerDelegate
 
-  /// Allow our long-press to recognize alongside UIButton's built-in recognizers — otherwise
-  /// the button's gesture would block ours and we'd never trigger voice.
+  /// Allow our parent-view long-press to coexist with UIButton's internal recognizers
+  /// (`showsMenuAsPrimaryAction` installs its own gesture). With `delaysTouchesBegan = true`
+  /// the button's gesture never sees the touch until ours fails, but we still allow simultaneous
+  /// recognition so the button's primary-action recognizer can fire on the *replayed* touches.
   func gestureRecognizer(
     _ gestureRecognizer: UIGestureRecognizer,
     shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer

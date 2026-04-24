@@ -18,7 +18,12 @@ import {
   Dimensions,
 } from 'react-native';
 import {Comment} from '../../lib/types';
-import {SafeAreaView, useSafeAreaInsets} from 'react-native-safe-area-context';
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+  initialWindowMetrics,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import {useNavigation, useRoute, RouteProp, useFocusEffect} from '@react-navigation/native';
 import {Share, Copy, Lock, X, Check, Download, CheckCircle, Circle, FileVideo, FileImage, ChevronLeft, ChevronRight} from 'lucide-react-native';
 import {theme} from '../../theme';
@@ -29,7 +34,6 @@ import {
   AudioPlayerWithWaveform,
   AudioPlayerWithWaveformRef,
 } from '../../components/AudioPlayerWithWaveform';
-import {Swipeable} from 'react-native-gesture-handler';
 import {CommentItem} from '../../components/CommentItem';
 import {formatVideoTimestamp} from '../../lib/utils';
 import {createClientReviewShareLink, getDeliverableGalleryImages, markDeliverableCommentsAsRead, markDeliverableAsFinal, unmarkDeliverableAsFinal} from '../../lib/api';
@@ -124,7 +128,6 @@ export function DeliverableReviewScreen() {
   // DeliverableReview is now a root-level stack screen (above the tab navigator), so the
   // native iOS tab bar is automatically out of the way — no setOptions hacks needed. We still
   // call hideTabBar() below to fade the floating create FAB while reviewing.
-  const swipeableRef = useRef<Swipeable>(null);
   const commentBarFocusAnim = useRef(new Animated.Value(1)).current;
   const runCommentBarFocus = useCallback(
     (focused: boolean) => {
@@ -851,65 +854,12 @@ export function DeliverableReviewScreen() {
     );
   }
 
-  const renderSwipeActions = () => (
-    <View style={swipeActionsStyles.container}>
-      <TouchableOpacity
-        style={[swipeActionsStyles.action, swipeActionsStyles.download]}
-        onPress={() => {
-          swipeableRef.current?.close();
-          handleDownload();
-        }}
-        disabled={isDownloading || !currentVersion?.file_url}>
-        <Download size={22} color="#fff" />
-        <Text style={swipeActionsStyles.actionText}>{getDownloadButtonText()}</Text>
-      </TouchableOpacity>
-      {!isFinalVersion ? (
-        <TouchableOpacity
-          style={[swipeActionsStyles.action, swipeActionsStyles.finalize]}
-          onPress={() => {
-            swipeableRef.current?.close();
-            handleFinalize();
-          }}
-          disabled={isFinalizing || !currentVersion}>
-          <CheckCircle size={22} color="#fff" />
-          <Text style={swipeActionsStyles.actionText}>
-            {isFinalizing ? '...' : 'Final'}
-          </Text>
-        </TouchableOpacity>
-      ) : (
-        <TouchableOpacity
-          style={[swipeActionsStyles.action, swipeActionsStyles.unfinalize]}
-          onPress={() => {
-            swipeableRef.current?.close();
-            handleUnfinalize();
-          }}
-          disabled={isFinalizing}>
-          <Circle size={22} color="#fff" />
-          <Text style={swipeActionsStyles.actionText}>Revert</Text>
-        </TouchableOpacity>
-      )}
-      <TouchableOpacity
-        style={[swipeActionsStyles.action, swipeActionsStyles.share]}
-        onPress={() => {
-          swipeableRef.current?.close();
-          setShowShareModal(true);
-        }}>
-        <Share size={22} color="#fff" />
-        <Text style={swipeActionsStyles.actionText}>Share</Text>
-      </TouchableOpacity>
-    </View>
-  );
-
+  // The right-swipe action panel (download / final / share) was removed in favor
+  // of the bottom Actions sheet, which is now the single surface for these
+  // commands. Keeping both was confusing and the swipe panel showed loud
+  // green/blue/violet tiles that fought with the brand.
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Swipeable
-        ref={swipeableRef}
-        renderRightActions={renderSwipeActions}
-        rightThreshold={60}
-        friction={2}
-        overshootRight={false}
-        containerStyle={styles.swipeableContainer}
-        childrenContainerStyle={styles.swipeableChildren}>
         <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1247,7 +1197,10 @@ export function DeliverableReviewScreen() {
           </Animated.View>
         )}
 
-        {/* Action Menu — PostHive sheet: sharp panel, uppercase header, icon wells */}
+        {/* Action Menu — brand glass sheet: rounded card, serif italic title,
+            uniform white glyphs (Final uses a tiny green status dot instead of
+            a colored icon well). Mirrors the PickerSheet pattern used in the
+            task editor so all sheets feel like one family. */}
         <Modal
           visible={showActionMenu}
           transparent
@@ -1267,11 +1220,6 @@ export function DeliverableReviewScreen() {
               ]}>
               <View style={styles.actionMenuContainer}>
                 <View style={styles.actionMenuGrabber} />
-                <View style={styles.actionMenuHeader}>
-                  <Text style={styles.actionMenuHeaderEyebrow}>PostHive</Text>
-                  <Text style={styles.actionMenuHeaderTitle}>Actions</Text>
-                </View>
-                <View style={styles.actionMenuDividerStrong} />
                 <TouchableOpacity
                   style={[
                     styles.actionMenuItem,
@@ -1282,10 +1230,10 @@ export function DeliverableReviewScreen() {
                     handleDownload();
                   }}
                   disabled={isDownloading || !currentVersion?.file_url}
-                  activeOpacity={0.75}>
-                  <View style={styles.actionMenuIconWell}>
+                  activeOpacity={0.7}>
+                  <View style={styles.actionMenuGlyph}>
                     <Download
-                      size={18}
+                      size={20}
                       color={
                         isDownloading || !currentVersion?.file_url
                           ? theme.colors.textMuted
@@ -1314,9 +1262,10 @@ export function DeliverableReviewScreen() {
                       handleFinalize();
                     }}
                     disabled={isFinalizing || !currentVersion}
-                    activeOpacity={0.75}>
-                    <View style={[styles.actionMenuIconWell, styles.actionMenuIconWellSuccess]}>
-                      <CheckCircle size={18} color={theme.colors.success} strokeWidth={2} />
+                    activeOpacity={0.7}>
+                    <View style={styles.actionMenuGlyph}>
+                      <CheckCircle size={20} color={theme.colors.textPrimary} strokeWidth={2} />
+                      <View style={[styles.actionMenuStatusDot, {backgroundColor: theme.colors.success}]} />
                     </View>
                     <View style={styles.actionMenuItemTextBlock}>
                       <Text style={styles.actionMenuText}>
@@ -1333,9 +1282,10 @@ export function DeliverableReviewScreen() {
                       handleUnfinalize();
                     }}
                     disabled={isFinalizing}
-                    activeOpacity={0.75}>
-                    <View style={[styles.actionMenuIconWell, styles.actionMenuIconWellWarning]}>
-                      <Circle size={18} color={theme.colors.warning} strokeWidth={2} />
+                    activeOpacity={0.7}>
+                    <View style={styles.actionMenuGlyph}>
+                      <Circle size={20} color={theme.colors.textPrimary} strokeWidth={2} />
+                      <View style={[styles.actionMenuStatusDot, {backgroundColor: theme.colors.warning}]} />
                     </View>
                     <View style={styles.actionMenuItemTextBlock}>
                       <Text style={styles.actionMenuText}>
@@ -1352,23 +1302,22 @@ export function DeliverableReviewScreen() {
                     setShowActionMenu(false);
                     setShowShareModal(true);
                   }}
-                  activeOpacity={0.75}>
-                  <View style={styles.actionMenuIconWell}>
-                    <Share size={18} color={theme.colors.textPrimary} strokeWidth={2} />
+                  activeOpacity={0.7}>
+                  <View style={styles.actionMenuGlyph}>
+                    <Share size={20} color={theme.colors.textPrimary} strokeWidth={2} />
                   </View>
                   <View style={styles.actionMenuItemTextBlock}>
                     <Text style={styles.actionMenuText}>Share with Client</Text>
                     <Text style={styles.actionMenuHint}>Review link, password, expiry</Text>
                   </View>
                 </TouchableOpacity>
-                <View style={styles.actionMenuDividerStrong} />
-                <TouchableOpacity
-                  style={[styles.actionMenuItem, styles.actionMenuCancel]}
-                  onPress={() => setShowActionMenu(false)}
-                  activeOpacity={0.75}>
-                  <Text style={styles.actionMenuCancelText}>Cancel</Text>
-                </TouchableOpacity>
               </View>
+              <TouchableOpacity
+                style={styles.actionMenuCancel}
+                onPress={() => setShowActionMenu(false)}
+                activeOpacity={0.7}>
+                <Text style={styles.actionMenuCancelText}>Cancel</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </Modal>
@@ -1552,43 +1501,9 @@ export function DeliverableReviewScreen() {
           </View>
         </Modal>
       </KeyboardAvoidingView>
-      </Swipeable>
     </SafeAreaView>
   );
 }
-
-const swipeActionsStyles = StyleSheet.create({
-  container: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    justifyContent: 'flex-end',
-    marginLeft: 8,
-  },
-  action: {
-    width: 72,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-  },
-  download: {
-    backgroundColor: '#3b82f6',
-  },
-  finalize: {
-    backgroundColor: theme.colors.success,
-  },
-  unfinalize: {
-    backgroundColor: theme.colors.warning,
-  },
-  share: {
-    backgroundColor: '#8b5cf6',
-  },
-  actionText: {
-    color: '#fff',
-    fontSize: 11,
-    fontFamily: theme.typography.fontFamily.semibold,
-    marginTop: 4,
-  },
-});
 
 // ===== SHARE MODAL COMPONENT =====
 
@@ -1725,14 +1640,29 @@ function ShareModal({
               transform: [{translateY: slideAnim}],
             },
           ]}>
-          <SafeAreaView style={shareModalStyles.safeArea} edges={['top', 'bottom']}>
+          <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+          {/* React Native Modal mounts in a separate native window on iOS, so
+              the outer SafeAreaProvider's context (and any SafeAreaView edges)
+              don't propagate inside the modal. We seed a fresh provider here
+              and additionally apply paddingTop/paddingLeft/Right manually to
+              the header so the close button is never tucked under the status
+              bar / notch. */}
+          <View
+            style={[
+              shareModalStyles.safeArea,
+              {
+                paddingTop: insets.top,
+                paddingLeft: insets.left,
+                paddingRight: insets.right,
+              },
+            ]}>
             {/* Header */}
             <View style={shareModalStyles.header}>
               <Text style={shareModalStyles.headerTitle}>SHARE WITH CLIENT</Text>
               <TouchableOpacity
                 onPress={handleClose}
                 style={shareModalStyles.closeButton}
-                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+                hitSlop={{top: 12, bottom: 12, left: 12, right: 12}}>
                 <X size={24} color={theme.colors.textPrimary} />
               </TouchableOpacity>
             </View>
@@ -1928,7 +1858,8 @@ function ShareModal({
               )}
               </ScrollView>
             </Animated.View>
-          </SafeAreaView>
+          </View>
+          </SafeAreaProvider>
         </Animated.View>
       </Animated.View>
     </Modal>
@@ -2314,12 +2245,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.background,
   },
-  swipeableContainer: {
-    flex: 1,
-  },
-  swipeableChildren: {
-    flex: 1,
-  },
   keyboardView: {
     flex: 1,
   },
@@ -2331,26 +2256,28 @@ const styles = StyleSheet.create({
   // Action menu — aligned with theme (zinc/black, sharp edges, Montserrat labels)
   actionMenuOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.82)',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'flex-end',
   },
   actionMenuSheet: {
-    paddingHorizontal: theme.spacing.md,
+    paddingHorizontal: theme.spacing.sm,
+    gap: theme.spacing.sm,
   },
   actionMenuContainer: {
-    backgroundColor: theme.colors.surfaceElevated,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    backgroundColor: 'rgba(20, 20, 22, 0.96)',
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     overflow: 'hidden',
   },
   actionMenuGrabber: {
     alignSelf: 'center',
     width: 36,
-    height: 3,
-    marginTop: theme.spacing.sm,
-    marginBottom: theme.spacing.xs,
-    backgroundColor: theme.colors.borderActive,
-    opacity: 0.5,
+    height: 4,
+    borderRadius: 2,
+    marginTop: 8,
+    marginBottom: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
   },
   actionMenuHeader: {
     paddingHorizontal: theme.spacing.lg,
@@ -2359,54 +2286,49 @@ const styles = StyleSheet.create({
   },
   actionMenuHeaderEyebrow: {
     color: theme.colors.textMuted,
-    fontSize: theme.typography.fontSize.xs,
+    fontSize: 10,
     fontFamily: theme.typography.fontFamily.semibold,
     textTransform: 'uppercase',
-    letterSpacing: theme.typography.letterSpacing.wide,
-    marginBottom: 6,
+    letterSpacing: 1.6,
+    marginBottom: 4,
   },
   actionMenuHeaderTitle: {
     color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.lg,
-    fontFamily: theme.typography.fontFamily.bold,
-    letterSpacing: theme.typography.letterSpacing.tight,
+    fontSize: 28,
+    lineHeight: 30,
+    fontFamily: theme.typography.fontFamily.serifItalic,
   },
   actionMenuDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: theme.colors.divider,
-    marginLeft: theme.spacing.lg + 40 + theme.spacing.md,
-  },
-  actionMenuDividerStrong: {
-    height: 1,
-    backgroundColor: theme.colors.border,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    marginLeft: theme.spacing.lg + 28 + theme.spacing.md,
   },
   actionMenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: theme.spacing.md,
+    paddingVertical: 14,
     paddingHorizontal: theme.spacing.lg,
     gap: theme.spacing.md,
     backgroundColor: 'transparent',
   },
   actionMenuItemDisabled: {
-    opacity: 0.5,
+    opacity: 0.45,
   },
-  actionMenuIconWell: {
-    width: 40,
-    height: 40,
+  actionMenuGlyph: {
+    width: 28,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceHover,
   },
-  actionMenuIconWellSuccess: {
-    borderColor: theme.colors.successBorder,
-    backgroundColor: theme.colors.successBackground,
-  },
-  actionMenuIconWellWarning: {
-    borderColor: theme.colors.warningBorder,
-    backgroundColor: theme.colors.warningBackground,
+  actionMenuStatusDot: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: 'rgba(20, 20, 22, 0.96)',
   },
   actionMenuItemTextBlock: {
     flex: 1,
@@ -2414,32 +2336,34 @@ const styles = StyleSheet.create({
   },
   actionMenuText: {
     color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.sm,
-    fontFamily: theme.typography.fontFamily.semibold,
-    letterSpacing: 0.2,
+    fontSize: 16,
+    fontFamily: theme.typography.fontFamily.medium,
+    letterSpacing: 0.1,
   },
   actionMenuTextMuted: {
     color: theme.colors.textMuted,
   },
   actionMenuHint: {
-    marginTop: 3,
+    marginTop: 2,
     color: theme.colors.textMuted,
-    fontSize: theme.typography.fontSize.xs,
+    fontSize: 12,
     fontFamily: theme.typography.fontFamily.regular,
     lineHeight: 16,
   },
   actionMenuCancel: {
     justifyContent: 'center',
-    paddingVertical: theme.spacing.md,
-    backgroundColor: theme.colors.surfaceHover,
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderRadius: 18,
+    backgroundColor: 'rgba(20, 20, 22, 0.96)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   actionMenuCancelText: {
-    color: theme.colors.textSecondary,
-    fontSize: theme.typography.fontSize.xs,
+    color: theme.colors.textPrimary,
+    fontSize: 16,
     fontFamily: theme.typography.fontFamily.semibold,
-    textTransform: 'uppercase',
-    letterSpacing: theme.typography.letterSpacing.wide,
-    textAlign: 'center',
+    letterSpacing: 0.2,
   },
   versionSelector: {
     flexDirection: 'row',

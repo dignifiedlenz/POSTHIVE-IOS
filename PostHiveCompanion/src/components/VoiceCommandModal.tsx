@@ -26,7 +26,12 @@ try {
 }
 import {theme} from '../theme';
 import {executeAICommand, AICommandResult} from '../lib/api';
+import {
+  prepareIosAudioSessionForRecording,
+  restoreIosAudioSessionForPlayback,
+} from '../lib/iosAudioSession';
 import {useAuth} from '../hooks/useAuth';
+import {useTabBar} from '../contexts/TabBarContext';
 import {GlassComposerBar} from './GlassComposerBar';
 
 interface VoiceCommandModalProps {
@@ -57,6 +62,7 @@ export function VoiceCommandModal({
   textOnly = false,
 }: VoiceCommandModalProps) {
   const {currentWorkspace} = useAuth();
+  const {rebindSharedVoiceListeners} = useTabBar();
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -154,53 +160,6 @@ export function VoiceCommandModal({
     }
   }, [isListening, waveAnim]);
 
-  // Voice recognition handlers - only set up if Voice is available
-  useEffect(() => {
-    if (!Voice || !voiceAvailable) {
-      return;
-    }
-
-    try {
-      Voice.onSpeechStart = () => {
-        setIsListening(true);
-      };
-      Voice.onSpeechEnd = () => {
-        setIsListening(false);
-      };
-      Voice.onSpeechResults = (e: any) => {
-        if (e.value && e.value.length > 0) {
-          const text = e.value[0];
-          setTranscript(text);
-          handleProcessCommand(text);
-        }
-      };
-      Voice.onSpeechError = (e: any) => {
-        console.error('Speech error:', e);
-        setIsListening(false);
-        if (e.error?.code !== '7') {
-          // Error code 7 is user cancellation, which is fine
-          Alert.alert('Speech Recognition Error', e.error?.message || 'Failed to recognize speech');
-        }
-      };
-    } catch (error) {
-      console.warn('Error setting up Voice handlers:', error);
-      setVoiceAvailable(false);
-    }
-
-    return () => {
-      try {
-        if (Voice && voiceAvailable) {
-          Voice.destroy().then(() => Voice.removeAllListeners()).catch(() => {
-            // Ignore errors during cleanup
-          });
-        }
-      } catch (error) {
-        // Ignore errors if Voice module isn't available
-        console.warn('Error cleaning up Voice:', error);
-      }
-    };
-  }, [voiceAvailable]);
-
   const startListening = useCallback(async () => {
     if (!Voice || !voiceAvailable) {
       Alert.alert(
@@ -215,9 +174,11 @@ export function VoiceCommandModal({
       setShowConfirmation(false);
       setParsedCommand(null);
       setCommandResult(null);
+      await prepareIosAudioSessionForRecording();
       await Voice.start('en-US');
     } catch (error) {
       console.error('Error starting voice recognition:', error);
+      void restoreIosAudioSessionForPlayback();
       Alert.alert('Error', 'Failed to start voice recognition. Make sure the app has microphone permissions.');
     }
   }, [voiceAvailable]);
@@ -288,6 +249,8 @@ export function VoiceCommandModal({
     } catch (error) {
       console.error('Error stopping voice recognition:', error);
       setIsListening(false); // Ensure state is updated even if stop fails
+    } finally {
+      void restoreIosAudioSessionForPlayback();
     }
   }, []);
 
@@ -307,6 +270,48 @@ export function VoiceCommandModal({
       await stopListening();
     }
   }, [currentWorkspace, stopListening]);
+
+  // While the modal is visible it owns the global Voice singleton callbacks. Never call
+  // Voice.destroy() here — that tears down the native engine and breaks FAB / assistant dictation.
+  useEffect(() => {
+    if (!Voice || !voiceAvailable || !visible) {
+      return;
+    }
+
+    try {
+      Voice.onSpeechStart = () => {
+        setIsListening(true);
+      };
+      Voice.onSpeechEnd = () => {
+        setIsListening(false);
+      };
+      Voice.onSpeechPartialResults = (e: any) => {
+        const t = e.value?.[0];
+        if (t) setTranscript(t);
+      };
+      Voice.onSpeechResults = (e: any) => {
+        if (e.value && e.value.length > 0) {
+          const text = e.value[0];
+          setTranscript(text);
+          handleProcessCommand(text);
+        }
+      };
+      Voice.onSpeechError = (e: any) => {
+        console.error('Speech error:', e);
+        setIsListening(false);
+        if (e.error?.code !== '7') {
+          Alert.alert('Speech Recognition Error', e.error?.message || 'Failed to recognize speech');
+        }
+      };
+    } catch (error) {
+      console.warn('Error setting up Voice handlers:', error);
+      setVoiceAvailable(false);
+    }
+
+    return () => {
+      rebindSharedVoiceListeners();
+    };
+  }, [visible, voiceAvailable, rebindSharedVoiceListeners, handleProcessCommand]);
 
   const handleConfirm = useCallback(async () => {
     if (!transcript.trim() || !currentWorkspace) return;

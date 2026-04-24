@@ -18,12 +18,10 @@ import LinearGradient from 'react-native-linear-gradient';
 import {useNavigation, useFocusEffect, CompositeNavigationProp} from '@react-navigation/native';
 import {StackNavigationProp} from '@react-navigation/stack';
 import {BottomTabNavigationProp} from '@react-navigation/bottom-tabs';
-import {ChevronRight, CheckSquare, Check, Plus, Bell, CheckCheck, X, Calendar, MapPin, Video as VideoIcon, Edit2, Save, Clock, Camera, CheckCircle} from 'lucide-react-native';
+import {ChevronRight, CheckSquare, Check, Plus, Bell, CheckCheck, X, Calendar, MapPin, Video as VideoIcon, Clock, CheckCircle} from 'lucide-react-native';
 import {format, isToday, isTomorrow, parseISO} from 'date-fns';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import {Platform, TextInput} from 'react-native';
 import {BlurView} from '@react-native-community/blur';
-import Video from 'react-native-video';
 import {theme} from '../../theme';
 import {useAuth} from '../../hooks/useAuth';
 import {useDeliverables} from '../../hooks/useDeliverables';
@@ -37,9 +35,10 @@ import {capitalizeFirst, canAccessWorkspaceNotifications} from '../../lib/utils'
 import {VoiceCommandModal} from '../../components/VoiceCommandModal';
 import {Deliverable, Todo, Notification, CalendarEvent} from '../../lib/types';
 import {DashboardStackParamList} from '../../app/App';
-import {updateTodo, markDeliverableAsFinal, getDeliverable} from '../../lib/api';
+import {updateTodo, markDeliverableAsFinal} from '../../lib/api';
 import {CongratulationsModal} from '../../components/CongratulationsModal';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
+import {TaskDetailsModal} from '../../components/TaskDetailsModal';
 import {useTabBar} from '../../contexts/TabBarContext';
 import type {MainTabParamList} from '../../app/App';
 
@@ -347,59 +346,24 @@ export function DashboardScreen() {
     return {upcomingDeadlines: upcoming, pastDeadlines: past};
   }, [deliverables]);
 
-  // Format event time nicely
-  const formatEventTime = (event: CalendarEvent) => {
+  // Two-line "when chip" used by the redesigned next-up card. Returns an editorial
+  // top line (time-of-day or "all day") and an uppercase day eyebrow underneath
+  // that resolves to "today" / "tomorrow" / "thu apr 23".
+  const formatEventChip = (event: CalendarEvent): {top: string; bottom: string} => {
     const start = parseISO(event.start_time);
-    const end = parseISO(event.end_time);
-    
+    const dayLabel = isToday(start)
+      ? 'today'
+      : isTomorrow(start)
+      ? 'tomorrow'
+      : format(start, 'EEE MMM d').toLowerCase();
     if (event.is_all_day) {
-      if (isToday(start)) return 'Today (All Day)';
-      if (isTomorrow(start)) return 'Tomorrow (All Day)';
-      return format(start, 'EEE, MMM d') + ' (All Day)';
+      return {top: 'All day', bottom: dayLabel};
     }
-    
-    const timeStr = format(start, 'h:mm a') + ' – ' + format(end, 'h:mm a');
-    if (isToday(start)) return `Today, ${timeStr}`;
-    if (isTomorrow(start)) return `Tomorrow, ${timeStr}`;
-    return format(start, 'EEE, MMM d') + ', ' + format(start, 'h:mm a');
+    return {top: format(start, 'h:mm a'), bottom: dayLabel};
   };
 
   const isLoading = deliverablesLoading || todosLoading;
   const isRefreshing = deliverablesRefreshing || todosRefreshing;
-
-  // If the most recent deliverable is a video, lazily resolve its HLS playback URL so we
-  // can autoplay it (muted + looping) underneath the blur. Falls back to the still
-  // thumbnail above whenever a stream isn't available or is still processing.
-  // NOTE: These hooks must be declared BEFORE any conditional early return below
-  // (e.g. the `if (isLoading)` guard) to keep hook ordering stable across renders.
-  const latestVideoDeliverable = useMemo(
-    () => sortedDeliverables.find(d => d.type === 'video'),
-    [sortedDeliverables],
-  );
-  const [heroVideoUrl, setHeroVideoUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setHeroVideoUrl(null);
-    if (!latestVideoDeliverable?.id) return;
-    (async () => {
-      try {
-        const full = await getDeliverable(latestVideoDeliverable.id);
-        if (cancelled) return;
-        const url = full?.latest_version?.file_url;
-        // Only autoplay HLS streams — direct mp4/r2 downloads can be huge and we don't want
-        // to hammer the network on the dashboard.
-        if (url && /\.m3u8($|\?)/i.test(url)) {
-          setHeroVideoUrl(url);
-        }
-      } catch {
-        // Stream lookup failed — silently fall back to the thumbnail.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [latestVideoDeliverable?.id]);
 
   const refresh = useCallback(async () => {
     await Promise.all([refreshDeliverables(), refreshTodos(), refreshCalendar()]);
@@ -575,10 +539,8 @@ export function DashboardScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      {/* Blurred latest-deliverable backdrop with a dark overlay — covers the whole screen
-          so the foreground content (Next Up / Tasks / Deadlines) sits cleanly on top. When
-          the most recent deliverable is a video with a ready HLS stream, that's autoplayed
-          (muted + looping) underneath the blur; otherwise the still thumbnail is used. */}
+      {/* Blurred latest-deliverable thumbnail backdrop — no HLS / react-native-video here so
+          the shared AVAudioSession stays free for speech recognition (see TabBarContext). */}
       <View
         style={[styles.heroBackdrop, {top: heroBackdropTopOffset}]}
         pointerEvents="none">
@@ -589,23 +551,6 @@ export function DashboardScreen() {
           // Native blur on Android; iOS uses BlurView below for a higher-quality effect.
           blurRadius={Platform.OS === 'android' ? 12 : 0}
         />
-        {/* Video (iOS only — Android lacks the BlurView path that gives us the nice frosted
-            look on top of moving footage; we keep the still thumbnail there instead). */}
-        {Platform.OS === 'ios' && heroVideoUrl ? (
-          <Video
-            source={{uri: heroVideoUrl, type: 'm3u8'}}
-            style={StyleSheet.absoluteFillObject}
-            resizeMode="cover"
-            muted
-            repeat
-            paused={false}
-            playInBackground={false}
-            playWhenInactive={false}
-            ignoreSilentSwitch="ignore"
-            controls={false}
-            disableFocus
-          />
-        ) : null}
         {Platform.OS === 'ios' && (
           <BlurView
             style={StyleSheet.absoluteFillObject}
@@ -639,10 +584,14 @@ export function DashboardScreen() {
             tintColor={theme.colors.textPrimary}
           />
         }>
-        {/* Editorial greeting — Miller Banner Light Italic, centered above NEXT UP. */}
+        {/* Greeting — plain system fonts. Day/date eyebrow on top, then the
+            time-of-day salutation underneath in regular sans. */}
         <View style={styles.greetingSection} pointerEvents="none">
+          <Text style={styles.greetingDate} numberOfLines={1}>
+            {format(new Date(), 'EEEE, MMMM d').toUpperCase()}
+          </Text>
           <Text style={styles.greetingText} numberOfLines={1} adjustsFontSizeToFit>
-            {firstName ? `${greeting}, ${firstName}.` : `${greeting}.`}
+            {firstName ? `${greeting}, ${firstName}` : greeting}
           </Text>
         </View>
         {/* Calendar — next up */}
@@ -665,58 +614,72 @@ export function DashboardScreen() {
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionLabel}>NEXT UP</Text>
           </View>
-          {nextEvent ? (
-            <TouchableOpacity
-              style={styles.upcomingEventCard}
-              onPress={() => {
-                const eventStart = parseISO(nextEvent.start_time);
-                const timeString = format(eventStart, 'HH:mm');
-                navigation.navigate('Calendar', {
-                  screen: 'Calendar',
-                  params: {
-                    date: eventStart.toISOString(),
-                    scrollToTime: timeString,
-                  },
-                });
-              }}
-              activeOpacity={0.8}>
-              <View style={styles.calendarIconBadge}>
-                <Calendar size={18} color={theme.colors.textPrimary} />
-              </View>
-              <View style={styles.upcomingEventContent}>
-                <View style={styles.upcomingEventTitleRow}>
-                  <Text style={styles.upcomingEventTitle} numberOfLines={1}>
+          {nextEvent ? (() => {
+            const chip = formatEventChip(nextEvent);
+            const hasVideo = Boolean(nextEvent.meeting_link);
+            return (
+              <TouchableOpacity
+                style={styles.upcomingEventCard}
+                onPress={() => {
+                  const eventStart = parseISO(nextEvent.start_time);
+                  const timeString = format(eventStart, 'HH:mm');
+                  navigation.navigate('Calendar', {
+                    screen: 'Calendar',
+                    params: {
+                      date: eventStart.toISOString(),
+                      scrollToTime: timeString,
+                    },
+                  });
+                }}
+                activeOpacity={0.85}>
+                {/* When chip — editorial time on top, lowercase day eyebrow below.
+                    Replaces the old generic Calendar icon badge so the most useful
+                    bit of info (when) reads first. */}
+                <View style={styles.upcomingEventWhenChip}>
+                  <Text
+                    style={styles.upcomingEventWhenTime}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit>
+                    {chip.top}
+                  </Text>
+                  <Text style={styles.upcomingEventWhenDay} numberOfLines={1}>
+                    {chip.bottom}
+                  </Text>
+                </View>
+                <View style={styles.upcomingEventContent}>
+                  <Text style={styles.upcomingEventTitle} numberOfLines={2}>
                     {nextEvent.title}
                   </Text>
-                  {nextEvent.meeting_link && (
-                    <Camera size={14} color={theme.colors.textMuted} style={styles.upcomingEventCameraIcon} />
-                  )}
-                </View>
-                <View style={styles.upcomingEventMeta}>
-                  <Text style={styles.upcomingEventTime}>{formatEventTime(nextEvent)}</Text>
-                  {nextEvent.location && (
-                    <View style={styles.upcomingEventLocation}>
-                      <MapPin size={10} color={theme.colors.textMuted} />
-                      <Text style={styles.upcomingEventLocationText} numberOfLines={1}>
-                        {nextEvent.location}
-                      </Text>
+                  {(nextEvent.location || hasVideo) && (
+                    <View style={styles.upcomingEventMeta}>
+                      {nextEvent.location && (
+                        <View style={styles.upcomingEventMetaItem}>
+                          <MapPin size={10} color={theme.colors.textMuted} />
+                          <Text style={styles.upcomingEventMetaText} numberOfLines={1}>
+                            {nextEvent.location}
+                          </Text>
+                        </View>
+                      )}
+                      {hasVideo && (
+                        <Text style={styles.upcomingEventVideoTag}>Video call</Text>
+                      )}
                     </View>
                   )}
                 </View>
-              </View>
-              <ChevronRight size={16} color={theme.colors.textMuted} />
-            </TouchableOpacity>
-          ) : (
+                <ChevronRight size={16} color={theme.colors.textMuted} />
+              </TouchableOpacity>
+            );
+          })() : (
             <TouchableOpacity
               style={styles.upcomingEventCard}
               onPress={openCalendarPager}
-              activeOpacity={0.8}>
-              <View style={styles.calendarIconBadge}>
-                <Calendar size={18} color={theme.colors.textMuted} />
+              activeOpacity={0.85}>
+              <View style={[styles.upcomingEventWhenChip, styles.upcomingEventWhenChipEmpty]}>
+                <Calendar size={20} color={theme.colors.textMuted} />
               </View>
               <View style={styles.upcomingEventContent}>
                 <Text style={styles.upcomingEventTitle}>Calendar</Text>
-                <Text style={styles.upcomingEventTime}>No upcoming events — open schedule</Text>
+                <Text style={styles.upcomingEventMetaText}>No upcoming events — open schedule</Text>
               </View>
               <ChevronRight size={16} color={theme.colors.textMuted} />
             </TouchableOpacity>
@@ -774,15 +737,14 @@ export function DashboardScreen() {
                   <Text style={styles.sectionLabel}>UPCOMING DEADLINES</Text>
                 </View>
                 <View style={styles.timelineContainer}>
-                  {upcomingDeadlines.map(({deliverable, dueDate, isToday}, index) => {
+                  {upcomingDeadlines.map(({deliverable, dueDate}, index) => {
                     const isFirst = index === 0;
                     const isLast = index === upcomingDeadlines.length - 1;
                     const isFinal = deliverable.status === 'final';
-                    const dotColor = isFinal 
-                      ? theme.colors.success 
-                      : isToday 
-                        ? theme.colors.warning 
-                        : theme.colors.textPrimary;
+                    // Today rows used to render as a yellow "Today" pill, but the wrapped
+                    // label looked broken in the timeline column — render every upcoming
+                    // deadline with the same day/month treatment regardless of date.
+                    const dotColor = isFinal ? theme.colors.success : theme.colors.textPrimary;
                     return (
                       <View key={deliverable.id} style={styles.timelineItem}>
                         {/* Date Column */}
@@ -790,18 +752,15 @@ export function DashboardScreen() {
                           <Text style={[
                             styles.timelineDateDay,
                             isFinal && {color: theme.colors.success},
-                            !isFinal && isToday && {color: theme.colors.warning},
                           ]}>
-                            {isToday ? 'Today' : format(dueDate, 'd')}
+                            {format(dueDate, 'd')}
                           </Text>
-                          {!isToday && (
-                            <Text style={[
-                              styles.timelineDateMonth,
-                              isFinal && {color: theme.colors.success},
-                            ]}>
-                              {format(dueDate, 'MMM')}
-                            </Text>
-                          )}
+                          <Text style={[
+                            styles.timelineDateMonth,
+                            isFinal && {color: theme.colors.success},
+                          ]}>
+                            {format(dueDate, 'MMM')}
+                          </Text>
                         </View>
                         
                         {/* Timeline Track */}
@@ -814,7 +773,6 @@ export function DashboardScreen() {
                             styles.timelineDot,
                             {backgroundColor: dotColor},
                             isFinal && styles.timelineDotFinal,
-                            !isFinal && isToday && styles.timelineDotToday,
                           ]} />
                           {!isLast && <View style={[
                             styles.timelineLineBottom,
@@ -964,417 +922,9 @@ export function DashboardScreen() {
   );
 }
 
-// Task Details Modal
-interface TaskDetailsModalProps {
-  visible: boolean;
-  todo: Todo | null;
-  onClose: () => void;
-  onToggleStatus: (todo: Todo) => void;
-  onUpdate?: () => void;
-}
-
-function TaskDetailsModal({visible, todo, onClose, onToggleStatus, onUpdate}: TaskDetailsModalProps) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [estimatedMinutes, setEstimatedMinutes] = useState('');
-  const [dueDate, setDueDate] = useState<Date | null>(null);
-  const [dueTime, setDueTime] = useState<Date | null>(null);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
-  const [showEstimatedTimePicker, setShowEstimatedTimePicker] = useState(false);
-
-  useEffect(() => {
-    if (todo) {
-      setEstimatedMinutes(todo.estimated_minutes?.toString() || '');
-      setDueDate(todo.due_date ? new Date(todo.due_date) : null);
-      setDueTime(todo.due_time ? new Date(`2000-01-01T${todo.due_time}`) : null);
-      setIsEditing(false);
-    }
-  }, [todo]);
-
-  const handleComplete = () => {
-    if (todo) {
-      onToggleStatus(todo);
-      onClose();
-    }
-  };
-
-  const handleDateChange = async (event: any, selectedDate?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowDatePicker(false);
-    }
-    if (selectedDate && todo) {
-      setDueDate(selectedDate);
-      setIsSaving(true);
-      try {
-        await updateTodo(todo.id, {
-          due_date: format(selectedDate, 'yyyy-MM-dd'),
-          due_time: dueTime ? format(dueTime, 'HH:mm:ss') : undefined,
-        });
-        onUpdate?.();
-      } catch (err) {
-        Alert.alert('Error', 'Failed to update due date. Please try again.');
-      } finally {
-        setIsSaving(false);
-      }
-    }
-  };
-
-  const handleTimeChange = async (event: any, selectedTime?: Date) => {
-    if (Platform.OS === 'android') {
-      setShowTimePicker(false);
-    }
-    if (selectedTime && todo) {
-      setDueTime(selectedTime);
-      setIsSaving(true);
-      try {
-        await updateTodo(todo.id, {
-          due_date: dueDate ? format(dueDate, 'yyyy-MM-dd') : undefined,
-          due_time: format(selectedTime, 'HH:mm:ss'),
-        });
-        onUpdate?.();
-      } catch (err) {
-        Alert.alert('Error', 'Failed to update due time. Please try again.');
-      } finally {
-        setIsSaving(false);
-      }
-    }
-  };
-
-  const handleSave = async () => {
-    if (!todo) return;
-
-    setIsSaving(true);
-    try {
-      await updateTodo(todo.id, {
-        estimated_minutes: estimatedMinutes ? parseInt(estimatedMinutes, 10) : undefined,
-        due_date: dueDate ? format(dueDate, 'yyyy-MM-dd') : undefined,
-        due_time: dueTime ? format(dueTime, 'HH:mm:ss') : undefined,
-      });
-      setIsEditing(false);
-      Alert.alert('Success', 'Task updated');
-      onUpdate?.();
-    } catch (err) {
-      Alert.alert('Error', 'Failed to update task. Please try again.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  if (!todo) return null;
-
-  const isCompleted = todo.status === 'completed';
-
-  return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}>
-      <View style={modalStyles.container}>
-        <View style={modalStyles.header}>
-          <TouchableOpacity onPress={onClose} style={modalStyles.closeButton}>
-            <Text style={modalStyles.closeText}>Close</Text>
-          </TouchableOpacity>
-          <Text style={modalStyles.headerTitle}>Task Details</Text>
-          <View style={modalStyles.spacer} />
-        </View>
-
-        <ScrollView style={modalStyles.content}>
-          <View style={modalStyles.field}>
-            <Text style={modalStyles.label}>TITLE</Text>
-            <Text style={modalStyles.value}>{capitalizeFirst(todo.title)}</Text>
-          </View>
-
-          {todo.description && (
-            <View style={modalStyles.field}>
-              <Text style={modalStyles.label}>DESCRIPTION</Text>
-              <Text style={modalStyles.value}>{todo.description}</Text>
-            </View>
-          )}
-
-          {/* Estimated Time */}
-          <View style={modalStyles.field}>
-            <Text style={modalStyles.label}>ESTIMATED TIME</Text>
-            <TouchableOpacity
-              style={modalStyles.dateButton}
-              onPress={() => {
-                setIsEditing(true);
-                setShowEstimatedTimePicker(true);
-              }}>
-              <Text style={modalStyles.dateText}>
-                {estimatedMinutes ? `${estimatedMinutes} minutes` : 'Tap to set (optional)'}
-              </Text>
-              {estimatedMinutes && (
-                <TouchableOpacity
-                  onPress={async (e) => {
-                    e.stopPropagation();
-                    if (!todo) return;
-                    setEstimatedMinutes('');
-                    setIsSaving(true);
-                    try {
-                      await updateTodo(todo.id, {
-                        estimated_minutes: undefined,
-                      });
-                      onUpdate?.();
-                    } catch (err) {
-                      Alert.alert('Error', 'Failed to clear estimated time. Please try again.');
-                    } finally {
-                      setIsSaving(false);
-                    }
-                  }}
-                  hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                  <X size={18} color={theme.colors.textMuted} />
-                </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {/* Due Date */}
-          <View style={modalStyles.field}>
-            <Text style={modalStyles.label}>DUE DATE</Text>
-            <TouchableOpacity
-              style={modalStyles.dateButton}
-              onPress={() => {
-                setIsEditing(true);
-                setShowDatePicker(true);
-              }}>
-              <Text style={modalStyles.dateText}>
-                {dueDate ? format(dueDate, 'MMM d, yyyy') : 'Select date (optional)'}
-              </Text>
-              {dueDate && (
-                <TouchableOpacity
-                  onPress={async (e) => {
-                    e.stopPropagation();
-                    if (!todo) return;
-                    setDueDate(null);
-                    setDueTime(null);
-                    setIsSaving(true);
-                    try {
-                      await updateTodo(todo.id, {
-                        due_date: undefined,
-                        due_time: undefined,
-                      });
-                      onUpdate?.();
-                    } catch (err) {
-                      Alert.alert('Error', 'Failed to clear due date. Please try again.');
-                    } finally {
-                      setIsSaving(false);
-                    }
-                  }}
-                  hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                  <X size={18} color={theme.colors.textMuted} />
-                </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-            {dueDate && (
-              <TouchableOpacity
-                style={[modalStyles.dateButton, {marginTop: 8}]}
-                onPress={() => {
-                  setIsEditing(true);
-                  setShowTimePicker(true);
-                }}>
-                <Text style={modalStyles.dateText}>
-                  {dueTime ? format(dueTime, 'h:mm a') : 'Select time (optional)'}
-                </Text>
-                {dueTime && (
-                  <TouchableOpacity
-                    onPress={async (e) => {
-                      e.stopPropagation();
-                      if (!todo) return;
-                      setDueTime(null);
-                      setIsSaving(true);
-                      try {
-                        await updateTodo(todo.id, {
-                          due_date: dueDate ? format(dueDate, 'yyyy-MM-dd') : undefined,
-                          due_time: undefined,
-                        });
-                        onUpdate?.();
-                      } catch (err) {
-                        Alert.alert('Error', 'Failed to clear due time. Please try again.');
-                      } finally {
-                        setIsSaving(false);
-                      }
-                    }}
-                    hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-                    <X size={18} color={theme.colors.textMuted} />
-                  </TouchableOpacity>
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {todo.project_name && (
-            <View style={modalStyles.field}>
-              <Text style={modalStyles.label}>PROJECT</Text>
-              <Text style={modalStyles.value}>{todo.project_name}</Text>
-            </View>
-          )}
-
-          {/* Date/Time Pickers */}
-          {showDatePicker && (
-            <View style={modalStyles.pickerContainer}>
-              {Platform.OS === 'ios' && (
-                <View style={modalStyles.pickerHeader}>
-                  <Text style={modalStyles.pickerTitle}>Due Date</Text>
-                  <TouchableOpacity 
-                    style={modalStyles.pickerDoneButton}
-                    onPress={() => setShowDatePicker(false)}>
-                    <Text style={modalStyles.pickerDoneText}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-              <DateTimePicker
-                value={dueDate || new Date()}
-                mode="date"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={handleDateChange}
-                themeVariant="dark"
-                style={Platform.OS === 'ios' ? modalStyles.picker : undefined}
-              />
-            </View>
-          )}
-
-          {showTimePicker && (
-            <View style={modalStyles.pickerContainer}>
-              {Platform.OS === 'ios' && (
-                <View style={modalStyles.pickerHeader}>
-                  <Text style={modalStyles.pickerTitle}>Due Time</Text>
-                  <TouchableOpacity 
-                    style={modalStyles.pickerDoneButton}
-                    onPress={() => setShowTimePicker(false)}>
-                    <Text style={modalStyles.pickerDoneText}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-              <DateTimePicker
-                value={dueTime || new Date()}
-                mode="time"
-                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={handleTimeChange}
-                themeVariant="dark"
-                style={Platform.OS === 'ios' ? modalStyles.picker : undefined}
-              />
-            </View>
-          )}
-
-          {!isEditing && (
-            <>
-              <TouchableOpacity
-                style={[modalStyles.completeButton, isCompleted && modalStyles.uncompleteButton]}
-                onPress={handleComplete}>
-                <Check size={20} color={isCompleted ? theme.colors.textPrimary : theme.colors.accentText} />
-                <Text style={[modalStyles.completeButtonText, isCompleted && modalStyles.uncompleteButtonText]}>
-                  {isCompleted ? 'Mark as Incomplete' : 'Mark as Complete'}
-                </Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                style={modalStyles.saveButton}
-                onPress={async () => {
-                  if (!todo) return;
-                  setIsSaving(true);
-                  try {
-                    await updateTodo(todo.id, {
-                      estimated_minutes: estimatedMinutes ? parseInt(estimatedMinutes, 10) : undefined,
-                      due_date: dueDate ? format(dueDate, 'yyyy-MM-dd') : undefined,
-                      due_time: dueTime ? format(dueTime, 'HH:mm:ss') : undefined,
-                    });
-                    onUpdate?.();
-                    onClose();
-                  } catch (err) {
-                    Alert.alert('Error', 'Failed to save changes. Please try again.');
-                  } finally {
-                    setIsSaving(false);
-                  }
-                }}
-                disabled={isSaving}>
-                {isSaving ? (
-                  <ActivityIndicator size="small" color={theme.colors.textPrimary} />
-                ) : (
-                  <>
-                    <Save size={20} color={theme.colors.textPrimary} />
-                    <Text style={modalStyles.saveButtonText}>Save</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </>
-          )}
-        </ScrollView>
-      </View>
-
-      {/* Estimated Time Picker Modal */}
-      <Modal
-        visible={showEstimatedTimePicker}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        onRequestClose={() => setShowEstimatedTimePicker(false)}>
-        <SafeAreaView style={modalStyles.timePickerContainer} edges={['top']}>
-          <View style={modalStyles.timePickerHeader}>
-            <Text style={modalStyles.timePickerTitle}>Select Estimated Time</Text>
-            <TouchableOpacity
-              onPress={() => setShowEstimatedTimePicker(false)}
-              style={modalStyles.timePickerCloseButton}>
-              <X size={24} color={theme.colors.textPrimary} />
-            </TouchableOpacity>
-          </View>
-          <ScrollView style={modalStyles.timePickerContent}>
-            {[
-              {label: '5 min', minutes: 5},
-              {label: '15 min', minutes: 15},
-              {label: '25 min', minutes: 25},
-              {label: '30 min', minutes: 30},
-              {label: '45 min', minutes: 45},
-              {label: '1 hour', minutes: 60},
-              {label: '1.5 hours', minutes: 90},
-              {label: '2 hours', minutes: 120},
-              {label: '3 hours', minutes: 180},
-              {label: '4 hours', minutes: 240},
-              {label: '6 hours', minutes: 360},
-              {label: '8 hours', minutes: 480},
-            ].map((option) => {
-              const isSelected = estimatedMinutes === option.minutes.toString() || todo?.estimated_minutes === option.minutes;
-              return (
-                <TouchableOpacity
-                  key={option.minutes}
-                  style={[
-                    modalStyles.timeOptionButton,
-                    isSelected && modalStyles.timeOptionButtonSelected,
-                  ]}
-                  onPress={async () => {
-                    if (!todo) return;
-                    const minutesStr = option.minutes.toString();
-                    setEstimatedMinutes(minutesStr);
-                    setShowEstimatedTimePicker(false);
-                    setIsSaving(true);
-                    try {
-                      await updateTodo(todo.id, {
-                        estimated_minutes: option.minutes,
-                      });
-                      onUpdate?.();
-                    } catch (err) {
-                      Alert.alert('Error', 'Failed to update estimated time. Please try again.');
-                      setEstimatedMinutes(todo.estimated_minutes?.toString() || '');
-                    } finally {
-                      setIsSaving(false);
-                    }
-                  }}>
-                  <Text
-                    style={[
-                      modalStyles.timeOptionText,
-                      isSelected && modalStyles.timeOptionTextSelected,
-                    ]}>
-                    {option.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
-    </Modal>
-  );
-}
+// Task Details Modal — see src/components/TaskDetailsModal.tsx for the
+// implementation. We share it with TasksScreen so the editorial header,
+// assignee, and linked-deliverable rows stay in lockstep.
 
 // Notifications Modal
 interface NotificationsModalProps {
@@ -1535,198 +1085,6 @@ const notificationModalStyles = StyleSheet.create({
 });
 
 
-const modalStyles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-  },
-  closeButton: {
-    paddingVertical: theme.spacing.sm,
-  },
-  closeText: {
-    color: theme.colors.textMuted,
-    fontSize: 14,
-  },
-  headerTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.lg,
-    fontWeight: '600',
-  },
-  spacer: {
-    width: 44,
-  },
-  editButton: {
-    padding: 4,
-  },
-  content: {
-    flex: 1,
-    padding: theme.spacing.lg,
-  },
-  field: {
-    marginBottom: theme.spacing.xl,
-  },
-  label: {
-    color: theme.colors.textMuted,
-    fontSize: theme.typography.fontSize.xs,
-    fontWeight: '600',
-    letterSpacing: 1.5,
-    marginBottom: theme.spacing.sm,
-  },
-  value: {
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.md,
-  },
-  dateButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    backgroundColor: theme.colors.surface,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  dateText: {
-    flex: 1,
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.md,
-  },
-  editInput: {
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: 8,
-    padding: 12,
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.md,
-  },
-  pickerContainer: {
-    marginTop: theme.spacing.md,
-    marginBottom: theme.spacing.lg,
-  },
-  pickerHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingBottom: theme.spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-    marginBottom: theme.spacing.sm,
-  },
-  pickerTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: '600',
-  },
-  pickerDoneButton: {
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-  },
-  pickerDoneText: {
-    color: theme.colors.accent,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: '600',
-  },
-  picker: {
-    height: 200,
-  },
-  timePickerContainer: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  timePickerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-  },
-  timePickerTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.lg,
-    fontWeight: '600',
-  },
-  timePickerCloseButton: {
-    padding: 4,
-  },
-  timePickerContent: {
-    flex: 1,
-    padding: theme.spacing.md,
-  },
-  timeOptionButton: {
-    paddingVertical: theme.spacing.lg,
-    paddingHorizontal: theme.spacing.md,
-    backgroundColor: theme.colors.surface,
-    borderRadius: 12,
-    marginBottom: theme.spacing.sm,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    alignItems: 'center',
-  },
-  timeOptionButtonSelected: {
-    backgroundColor: theme.colors.accent,
-    borderColor: theme.colors.accent,
-  },
-  timeOptionText: {
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: '500',
-  },
-  timeOptionTextSelected: {
-    color: theme.colors.accentText,
-  },
-  completeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: theme.spacing.md,
-    backgroundColor: theme.colors.success,
-    gap: theme.spacing.sm,
-    marginTop: theme.spacing.lg,
-  },
-  uncompleteButton: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  completeButtonText: {
-    color: theme.colors.accentText,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: '600',
-  },
-  uncompleteButtonText: {
-    color: theme.colors.textPrimary,
-  },
-  saveButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: theme.spacing.md,
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    gap: theme.spacing.sm,
-    marginTop: theme.spacing.md,
-  },
-  saveButtonText: {
-    color: theme.colors.textPrimary,
-    fontSize: theme.typography.fontSize.md,
-    fontWeight: '600',
-  },
-});
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1792,74 +1150,100 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  greetingText: {
-    fontFamily: theme.typography.fontFamily.serifItalic,
-    // The OTF is already italic; setting fontStyle here on iOS would request a synthetic
-    // slant on top of the cut and trigger glyph fallback. Leave it off.
-    color: theme.colors.textPrimary,
-    fontSize: 38,
-    lineHeight: 44,
-    letterSpacing: 0.2,
+  greetingDate: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    letterSpacing: 1.8,
     textAlign: 'center',
-    opacity: 0.95,
+    fontFamily: theme.typography.fontFamily.semibold,
+    marginBottom: 4,
   },
-  calendarIconBadge: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
+  greetingText: {
+    color: theme.colors.textPrimary,
+    fontSize: 22,
+    lineHeight: 28,
+    textAlign: 'center',
+    fontFamily: theme.typography.fontFamily.semibold,
+    letterSpacing: 0.1,
   },
   upcomingEventCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: theme.spacing.md,
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderLeftWidth: 3,
-    borderLeftColor: '#3B82F6',
+    paddingVertical: 14,
+    paddingLeft: 14,
+    paddingRight: theme.spacing.md,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     gap: theme.spacing.md,
+  },
+  // Vertical "when" chip — editorial time on top, lowercase day eyebrow below.
+  // Sized to match a generous square avatar so the card stays balanced.
+  upcomingEventWhenChip: {
+    minWidth: 64,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  upcomingEventWhenChipEmpty: {
+    paddingVertical: 14,
+  },
+  upcomingEventWhenTime: {
+    color: theme.colors.textPrimary,
+    fontSize: 17,
+    lineHeight: 20,
+    fontFamily: theme.typography.fontFamily.semibold,
+    letterSpacing: 0.1,
+  },
+  upcomingEventWhenDay: {
+    color: theme.colors.textMuted,
+    fontSize: 9,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    marginTop: 2,
+    fontFamily: theme.typography.fontFamily.semibold,
   },
   upcomingEventContent: {
     flex: 1,
-    gap: 2,
-  },
-  upcomingEventTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.spacing.xs,
+    gap: 4,
+    minWidth: 0,
   },
   upcomingEventTitle: {
-    flex: 1,
     color: theme.colors.textPrimary,
-    fontSize: 15,
-    fontFamily: theme.typography.fontFamily.medium,
-  },
-  upcomingEventCameraIcon: {
-    marginLeft: theme.spacing.xs,
+    fontSize: 16,
+    lineHeight: 20,
+    fontFamily: theme.typography.fontFamily.semibold,
   },
   upcomingEventMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.spacing.sm,
+    gap: 10,
     flexWrap: 'wrap',
-    marginTop: 2,
   },
-  upcomingEventTime: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    fontFamily: theme.typography.fontFamily.regular,
-  },
-  upcomingEventLocation: {
+  upcomingEventMetaItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    gap: 4,
+    flexShrink: 1,
   },
-  upcomingEventLocationText: {
+  upcomingEventMetaText: {
     color: theme.colors.textMuted,
     fontSize: 11,
     fontFamily: theme.typography.fontFamily.regular,
-    maxWidth: 120,
+    maxWidth: 160,
+  },
+  upcomingEventVideoTag: {
+    color: theme.colors.textMuted,
+    fontSize: 10,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    fontFamily: theme.typography.fontFamily.semibold,
   },
   tasksSection: {
     marginBottom: theme.spacing.sm,
@@ -1969,14 +1353,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.textPrimary,
     marginTop: 12,
     zIndex: 1,
-  },
-  timelineDotToday: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    marginTop: 11,
-    borderWidth: 2,
-    borderColor: 'rgba(255, 193, 7, 0.3)',
   },
   timelineDotFinal: {
     width: 14,

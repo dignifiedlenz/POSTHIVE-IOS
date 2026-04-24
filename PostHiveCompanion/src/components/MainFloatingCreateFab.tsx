@@ -47,7 +47,18 @@ const FAB_PRESS_SPRING_OUT = {
   overshootClamping: true,
 } as const;
 
-/** Floating create / voice FAB above the bottom tab bar (native on iOS, material on Android). */
+/** Same target as `AuthenticatedApp` when routing a committed voice command to the assistant. */
+function navigateToAssistantChat(nav: {navigate: (name: string, params?: object) => void}) {
+  nav.navigate('MainTabs', {
+    screen: 'Assistant',
+    params: {screen: 'AssistantChat'},
+  });
+}
+
+/**
+ * Floating create FAB above the bottom tab bar (native on iOS, material on Android).
+ * Short tap → system create menu. Long press → open Assistant with live dictation in the composer.
+ */
 export function MainFloatingCreateFab() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
@@ -90,9 +101,10 @@ export function MainFloatingCreateFab() {
       Alert.alert('Voice Not Available', 'Voice recognition is not available on this device.');
       return;
     }
+    navigateToAssistantChat(navigation);
     Vibration.vibrate(50);
     await startVoiceCapture();
-  }, [voiceAvailable, startVoiceCapture]);
+  }, [voiceAvailable, navigation, startVoiceCapture]);
 
   const stopVoiceListening = useCallback(
     async (abort: boolean) => {
@@ -210,7 +222,7 @@ export function MainFloatingCreateFab() {
       accessible
       accessibilityRole="button"
       accessibilityLabel="Create new, hold for voice command"
-      accessibilityHint="Tap to create. Touch and hold to dictate to the assistant."
+      accessibilityHint="Tap for the create menu. Touch and hold to open the assistant and dictate."
       style={{width: FAB_SIZE, height: FAB_SIZE}}>
       <AppleNativeFabChrome
         size={FAB_SIZE}

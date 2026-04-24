@@ -44,11 +44,22 @@ target 'PostHiveCompanion' do
         build_config.build_settings['CODE_SIGNING_REQUIRED'] = 'NO'
         build_config.build_settings['CODE_SIGN_IDENTITY'] = ''
         
-        # Fix react-native-document-picker: add ReactCodegen header path for rndocumentpicker.h (New Architecture)
-        if target.name == 'react-native-document-picker'
+        # New Architecture: ensure generated TurboModule headers resolve (same as RN document-picker workaround).
+        if target.name == 'react-native-document-picker' || target.name == 'RNScreens'
           codegen_path = File.join(Pod::Config.instance.installation_root, 'build/generated/ios/ReactCodegen')
           build_config.build_settings['HEADER_SEARCH_PATHS'] ||= '$(inherited)'
           build_config.build_settings['HEADER_SEARCH_PATHS'] << " \"#{codegen_path}\""
+        end
+
+        # RNScreens .mm must see RCT_NEW_ARCH_ENABLED for Obj-C preprocessing, not only OTHER_CPLUSPLUSFLAGS.
+        if target.name == 'RNScreens'
+          defs = build_config.build_settings['GCC_PREPROCESSOR_DEFINITIONS']
+          defs = ['$(inherited)'] if defs.nil?
+          defs = [defs] unless defs.is_a?(Array)
+          unless defs.join.include?('RCT_NEW_ARCH_ENABLED')
+            defs << 'RCT_NEW_ARCH_ENABLED=1'
+          end
+          build_config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
         end
       end
     end

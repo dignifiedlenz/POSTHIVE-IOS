@@ -45,24 +45,31 @@ interface MenuItem {
 
 const primaryItems: MenuItem[] = [
   {
+    label: 'Dashboard',
+    action: 'tab',
+    route: 'MainTabs',
+    params: {screen: 'Home', params: {screen: 'Dashboard'}},
+    activeRoutes: ['Dashboard'],
+  },
+  {
     label: 'Drive',
-    action: 'screen',
-    route: 'Menu',
-    screen: 'DriveExplorer',
+    action: 'tab',
+    route: 'MainTabs',
+    params: {screen: 'Home', params: {screen: 'DriveExplorer'}},
     activeRoutes: ['DriveExplorer'],
   },
   {
     label: 'Transfers',
-    action: 'screen',
-    route: 'Menu',
-    screen: 'TransferHistory',
+    action: 'tab',
+    route: 'MainTabs',
+    params: {screen: 'Home', params: {screen: 'TransferHistory'}},
     activeRoutes: ['TransferHistory', 'TransferDetail'],
   },
   {
     label: 'Notifications',
-    action: 'screen',
-    route: 'Menu',
-    screen: 'Notifications',
+    action: 'tab',
+    route: 'MainTabs',
+    params: {screen: 'Home', params: {screen: 'Notifications'}},
     activeRoutes: ['Notifications'],
   },
 ];
@@ -70,16 +77,16 @@ const primaryItems: MenuItem[] = [
 const footerItems: MenuItem[] = [
   {
     label: 'Account',
-    action: 'screen',
-    route: 'Menu',
-    screen: 'Profile',
+    action: 'tab',
+    route: 'MainTabs',
+    params: {screen: 'Home', params: {screen: 'Profile'}},
     activeRoutes: ['Profile'],
   },
   {
     label: 'Notification Settings',
-    action: 'screen',
-    route: 'Menu',
-    screen: 'NotificationSettings',
+    action: 'tab',
+    route: 'MainTabs',
+    params: {screen: 'Home', params: {screen: 'NotificationSettings'}},
   },
   {
     label: 'Privacy Policy',
