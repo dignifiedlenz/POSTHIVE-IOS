@@ -1,13 +1,6 @@
 import {useState, useEffect, useCallback, createContext, useContext, useRef} from 'react';
-import {Platform} from 'react-native';
 import {User as SupabaseUser, Session} from '@supabase/supabase-js';
-import {
-  supabase,
-  signOut as supabaseSignOut,
-  getSignInWithBrowserUrl,
-  createSessionFromUrl,
-} from '../lib/supabase';
-import {isNativeAuthSessionAvailable, startNativeAuthSession} from '../lib/nativeAuthSession';
+import {supabase, signOut as supabaseSignOut} from '../lib/supabase';
 import {devLog, devWarn} from '../lib/devLog';
 import {getUserWorkspaces, getUserPreferredWorkspace, getUserPrimaryWorkspace, setUserPreferredWorkspace} from '../lib/api';
 import {Workspace} from '../lib/types';
@@ -270,34 +263,11 @@ export function useAuthState() {
     };
   }, [handleSignedInSession, refreshAuthState]);
 
+  // In-app WebView for all platforms (ASWebAuthenticationSession was unreliable on TestFlight).
   const signInWithBrowser = useCallback(async () => {
     setError(null);
-
-    if (Platform.OS === 'ios' && isNativeAuthSessionAvailable()) {
-      setIsLoading(true);
-      try {
-        const authUrl = getSignInWithBrowserUrl();
-        const callbackUrl = await startNativeAuthSession(authUrl);
-        const result = await createSessionFromUrl(callbackUrl);
-        if (!result) {
-          setError('Invalid auth response');
-          return;
-        }
-        await refreshAuthState();
-      } catch (err: unknown) {
-        const e = err as {code?: string; message?: string};
-        if (e?.code === 'E_CANCELLED') {
-          return;
-        }
-        setError(typeof e?.message === 'string' ? e.message : 'Sign-in failed');
-      } finally {
-        setIsLoading(false);
-      }
-      return;
-    }
-
     setShowAuthWebView(true);
-  }, [refreshAuthState]);
+  }, []);
 
   const closeAuthWebView = useCallback(() => {
     setShowAuthWebView(false);

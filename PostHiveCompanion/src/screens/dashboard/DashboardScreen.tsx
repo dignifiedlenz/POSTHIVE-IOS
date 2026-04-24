@@ -323,34 +323,21 @@ export function DashboardScreen() {
     return upcoming[0] || null;
   }, [calendarEvents]);
 
-  // Split deliverable deadlines into upcoming and past
-  const {upcomingDeadlines, pastDeadlines} = useMemo(() => {
+  // Deliverable deadlines: today and future only (past due dates stay off the dashboard).
+  const upcomingDeadlines = useMemo(() => {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
-    
-    const all = deliverables
+
+    return deliverables
       .filter((d): d is Deliverable & {due_date: string} => Boolean(d.due_date))
       .map(d => {
         const due = new Date(d.due_date);
         due.setHours(0, 0, 0, 0);
-        const isPast = due < now;
-        const isToday = due.getTime() === now.getTime();
-        return {deliverable: d, dueDate: due, isPast, isToday};
-      });
-    
-    // Upcoming: today and future, sorted by date ascending
-    const upcoming = all
-      .filter(d => !d.isPast)
+        return {deliverable: d, dueDate: due};
+      })
+      .filter(({dueDate}) => dueDate >= now)
       .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())
       .slice(0, 5);
-    
-    // Past: before today, sorted by date descending (most recent first)
-    const past = all
-      .filter(d => d.isPast)
-      .sort((a, b) => b.dueDate.getTime() - a.dueDate.getTime())
-      .slice(0, 3);
-    
-    return {upcomingDeadlines: upcoming, pastDeadlines: past};
   }, [deliverables]);
 
   // Two-line "when chip" used by the redesigned next-up card. Returns an editorial
@@ -706,7 +693,7 @@ export function DashboardScreen() {
         {/* Tasks section */}
         <Animated.View style={[
           styles.tasksSection,
-          (upcomingDeadlines.length === 0 && pastDeadlines.length === 0) && styles.tasksSectionLast,
+          upcomingDeadlines.length === 0 && styles.tasksSectionLast,
           {
             opacity: sectionAnimations[1],
             transform: [{translateY: sectionAnimations[1].interpolate({
@@ -738,8 +725,8 @@ export function DashboardScreen() {
           )}
         </Animated.View>
 
-        {/* Deliverable Deadlines - Upcoming and Past */}
-        {(upcomingDeadlines.length > 0 || pastDeadlines.length > 0) && (
+        {/* Deliverable deadlines (today onward only) */}
+        {upcomingDeadlines.length > 0 && (
           <Animated.View style={[styles.deadlineSection, {
             opacity: sectionAnimations[2],
             transform: [{translateY: sectionAnimations[2].interpolate({
@@ -822,59 +809,6 @@ export function DashboardScreen() {
                             <CheckCircle size={16} color={theme.colors.success} style={{marginRight: 4}} />
                           )}
                           <ChevronRight size={14} color={isFinal ? theme.colors.success : theme.colors.textMuted} />
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  })}
-                </View>
-              </>
-            )}
-
-            {/* Past Deadlines */}
-            {pastDeadlines.length > 0 && (
-              <>
-                <View style={[styles.sectionHeader, upcomingDeadlines.length > 0 && {marginTop: 24}]}>
-                  <Text style={styles.sectionLabel}>PAST</Text>
-                </View>
-                <View style={[styles.timelineContainer, {opacity: 0.5}]}>
-                  {pastDeadlines.map(({deliverable, dueDate}, index) => {
-                    const isFirst = index === 0;
-                    const isLast = index === pastDeadlines.length - 1;
-                    return (
-                      <View key={deliverable.id} style={styles.timelineItem}>
-                        {/* Date Column */}
-                        <View style={styles.timelineDateColumn}>
-                          <Text style={[styles.timelineDateDay, {color: theme.colors.textMuted}]}>
-                            {format(dueDate, 'd')}
-                          </Text>
-                          <Text style={[styles.timelineDateMonth, {color: theme.colors.textMuted}]}>
-                            {format(dueDate, 'MMM')}
-                          </Text>
-                        </View>
-                        
-                        {/* Timeline Track */}
-                        <View style={styles.timelineTrack}>
-                          {!isFirst && <View style={[styles.timelineLineTop, {backgroundColor: theme.colors.border}]} />}
-                          <View style={[styles.timelineDot, {backgroundColor: theme.colors.textMuted}]} />
-                          {!isLast && <View style={[styles.timelineLineBottom, {backgroundColor: theme.colors.border}]} />}
-                        </View>
-                        
-                        {/* Content Card */}
-                        <TouchableOpacity
-                          style={[styles.timelineCard, {backgroundColor: theme.colors.surface}]}
-                          onPress={() => handleDeliverablePress(deliverable)}
-                          activeOpacity={0.8}>
-                          <View style={styles.timelineCardContent}>
-                            <Text style={[styles.timelineCardTitle, {color: theme.colors.textMuted}]} numberOfLines={1}>
-                              {deliverable.name}
-                            </Text>
-                            {deliverable.project_name && (
-                              <Text style={[styles.timelineCardSubtitle, {color: theme.colors.textMuted}]} numberOfLines={1}>
-                                {deliverable.project_name}
-                              </Text>
-                            )}
-                          </View>
-                          <ChevronRight size={14} color={theme.colors.textMuted} />
                         </TouchableOpacity>
                       </View>
                     );
