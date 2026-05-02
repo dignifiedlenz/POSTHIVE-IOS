@@ -1,4 +1,4 @@
-import React, {useCallback, useMemo} from 'react';
+import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   RefreshControl,
   TouchableOpacity,
   Image,
+  ScrollView,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
@@ -18,7 +19,8 @@ import {theme} from '../../theme';
 import {BrandedLoadingScreen} from '../../components/BrandedLoadingScreen';
 import {useAuth} from '../../hooks/useAuth';
 import {useDeliverables} from '../../hooks/useDeliverables';
-import {Deliverable} from '../../lib/types';
+import {Deliverable, Series} from '../../lib/types';
+import {getWorkspaceSeries} from '../../lib/api';
 import {DeliverablesStackParamList} from '../../app/App';
 
 type NavigationProp = StackNavigationProp<DeliverablesStackParamList, 'RecentDeliverables'>;
@@ -159,6 +161,25 @@ export function RecentDeliverablesScreen() {
     workspaceId: currentWorkspace?.id || '',
     userId: user?.id || '',
   });
+  const [seriesList, setSeriesList] = useState<Series[]>([]);
+
+  const loadSeries = useCallback(async () => {
+    if (!currentWorkspace?.id) return;
+    try {
+      const data = await getWorkspaceSeries(currentWorkspace.id);
+      setSeriesList(data);
+    } catch (err) {
+      console.error('Error loading series for deliverables:', err);
+    }
+  }, [currentWorkspace?.id]);
+
+  useEffect(() => {
+    void loadSeries();
+  }, [loadSeries]);
+
+  const onRefreshAll = useCallback(async () => {
+    await Promise.all([refresh(), loadSeries()]);
+  }, [refresh, loadSeries]);
 
   const sortedDeliverables = useMemo(
     () =>
@@ -179,6 +200,69 @@ export function RecentDeliverablesScreen() {
     },
     [navigation],
   );
+
+  const handleSeriesStripPress = useCallback(
+    (s: Series) => {
+      navigation.navigate('SeriesItems', {
+        seriesId: s.id,
+        seriesName: s.name,
+        seriesDescription: s.description,
+        thumbnailUrl: s.thumbnail,
+        itemCount: s.item_count,
+      });
+    },
+    [navigation],
+  );
+
+  const listHeader = useMemo(() => {
+    if (seriesList.length === 0) return null;
+    const preview = seriesList.slice(0, 16);
+    return (
+      <View style={styles.seriesSection}>
+        <View style={styles.seriesSectionTitleRow}>
+          <Text style={styles.seriesSectionTitle}>SERIES</Text>
+          <TouchableOpacity
+            onPress={() => navigation.navigate('SeriesList')}
+            hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+            <Text style={styles.seriesSeeAll}>See all</Text>
+          </TouchableOpacity>
+        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.seriesStripContent}>
+          {preview.map(s => (
+            <TouchableOpacity
+              key={s.id}
+              style={styles.seriesStripCard}
+              onPress={() => handleSeriesStripPress(s)}
+              activeOpacity={0.85}>
+              {s.thumbnail ? (
+                <Image source={{uri: s.thumbnail}} style={styles.seriesStripImage} resizeMode="cover" />
+              ) : (
+                <View style={styles.seriesStripImagePlaceholder}>
+                  <Image
+                    source={{uri: DEFAULT_THUMBNAIL}}
+                    style={styles.seriesStripFallback}
+                    resizeMode="cover"
+                  />
+                </View>
+              )}
+              <View style={styles.seriesStripMeta}>
+                <Text style={styles.seriesStripName} numberOfLines={2}>
+                  {s.name}
+                </Text>
+                <Text style={styles.seriesStripCount}>
+                  {s.item_count} {s.item_count === 1 ? 'item' : 'items'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        <Text style={styles.recentSectionLabel}>RECENT DELIVERABLES</Text>
+      </View>
+    );
+  }, [seriesList, navigation, handleSeriesStripPress]);
 
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
@@ -213,11 +297,11 @@ export function RecentDeliverablesScreen() {
           styles.list,
           sortedDeliverables.length === 0 && styles.emptyList,
         ]}
-        ListEmptyComponent={renderEmptyState}
+        ListHeaderComponent={listHeader}
         refreshControl={
           <RefreshControl
             refreshing={isRefreshing}
-            onRefresh={refresh}
+            onRefresh={onRefreshAll}
             tintColor={theme.colors.textPrimary}
           />
         }
@@ -235,6 +319,83 @@ const styles = StyleSheet.create({
   list: {
     paddingTop: theme.spacing.sm,
     paddingBottom: theme.spacing.xl,
+  },
+  seriesSection: {
+    paddingBottom: theme.spacing.md,
+    marginBottom: theme.spacing.xs,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  seriesSectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing.md,
+    marginBottom: theme.spacing.sm,
+  },
+  seriesSectionTitle: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    fontFamily: theme.typography.fontFamily.semibold,
+    letterSpacing: 2,
+  },
+  seriesSeeAll: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    fontFamily: theme.typography.fontFamily.medium,
+  },
+  seriesStripContent: {
+    paddingHorizontal: theme.spacing.md,
+    gap: 10,
+    paddingBottom: theme.spacing.md,
+  },
+  seriesStripCard: {
+    width: 132,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.surfaceElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+  },
+  seriesStripImage: {
+    width: '100%',
+    height: 74,
+  },
+  seriesStripImagePlaceholder: {
+    width: '100%',
+    height: 74,
+    backgroundColor: theme.colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  seriesStripFallback: {
+    width: '100%',
+    height: '100%',
+    opacity: 0.85,
+  },
+  seriesStripMeta: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  seriesStripName: {
+    color: theme.colors.textPrimary,
+    fontSize: 12,
+    fontFamily: theme.typography.fontFamily.bold,
+  },
+  seriesStripCount: {
+    marginTop: 4,
+    color: theme.colors.textMuted,
+    fontSize: 10,
+    fontFamily: theme.typography.fontFamily.medium,
+    letterSpacing: 0.5,
+  },
+  recentSectionLabel: {
+    color: theme.colors.textMuted,
+    fontSize: 11,
+    fontFamily: theme.typography.fontFamily.semibold,
+    letterSpacing: 2,
+    paddingHorizontal: theme.spacing.md,
+    marginTop: theme.spacing.xs,
   },
   emptyList: {
     flexGrow: 1,

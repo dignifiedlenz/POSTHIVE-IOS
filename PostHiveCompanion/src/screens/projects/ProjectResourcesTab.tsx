@@ -15,15 +15,17 @@ import {
   Alert,
   useWindowDimensions,
 } from 'react-native';
-import {FileVideo, FileImage, File, Star, Play, X, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, ArrowUpDown, Download, Check} from 'lucide-react-native';
+import {FileVideo, FileImage, File, Star, Play, X, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, ArrowUpDown, Download, Check, Layers} from 'lucide-react-native';
 import {theme} from '../../theme';
 import {useProjectParams} from '../../contexts/ProjectContext';
 import {useAuth} from '../../hooks/useAuth';
 import {
   getProjectResources,
+  getProjectScenes,
   getDownloadUrl,
   updateAssetTagsAndRating,
   type ProjectResource,
+  type ProjectScene,
 } from '../../lib/api';
 import {CameraRoll} from '@react-native-camera-roll/camera-roll';
 import ReactNativeBlobUtil from 'react-native-blob-util';
@@ -169,12 +171,16 @@ function ResourceCard({
   );
 }
 
+type SceneFilter = 'all' | '__unassigned' | string;
+
 export function ProjectResourcesTab() {
   const {width: screenWidth} = useWindowDimensions();
   const {projectId} = useProjectParams();
   const {currentWorkspace} = useAuth();
   const [resources, setResources] = useState<ProjectResource[]>([]);
+  const [scenes, setScenes] = useState<ProjectScene[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [sceneFilter, setSceneFilter] = useState<SceneFilter>('all');
   const [selectedResource, setSelectedResource] = useState<ProjectResource | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [editTagsArray, setEditTagsArray] = useState<string[]>([]);
@@ -199,19 +205,75 @@ export function ProjectResourcesTab() {
   const isScrollingProgrammatically = useRef(false);
   const skipNextScrollSync = useRef(false);
 
+  useEffect(() => {
+    setSceneFilter('all');
+  }, [projectId]);
+
+  const scenesSortedByName = useMemo(
+    () =>
+      [...scenes].sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, {sensitivity: 'base'}),
+      ),
+    [scenes],
+  );
+
+  const assignedAssetIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const sc of scenes) {
+      for (const c of sc.clips) {
+        ids.add(c.asset_id);
+      }
+    }
+    return ids;
+  }, [scenes]);
+
+  const hasUnassignedResources = useMemo(
+    () => resources.some(r => !assignedAssetIds.has(r.id)),
+    [resources, assignedAssetIds],
+  );
+
+  const resourcesFilteredByScene = useMemo(() => {
+    if (sceneFilter === 'all') {
+      return resources;
+    }
+    if (sceneFilter === '__unassigned') {
+      return resources.filter(r => !assignedAssetIds.has(r.id));
+    }
+    const scene = scenes.find(s => s.id === sceneFilter);
+    if (!scene) {
+      return resources;
+    }
+    const inScene = new Set(scene.clips.map(c => c.asset_id));
+    return resources.filter(r => inScene.has(r.id));
+  }, [resources, sceneFilter, scenes, assignedAssetIds]);
+
   const sortedResources = useMemo(
-    () => sortResources(resources, sortBy),
-    [resources, sortBy],
+    () => sortResources(resourcesFilteredByScene, sortBy),
+    [resourcesFilteredByScene, sortBy],
   );
 
   const cardSize = (screenWidth - theme.spacing.md * 3) / 2;
+
+  useEffect(() => {
+    if (sceneFilter === 'all' || sceneFilter === '__unassigned') return;
+    if (scenes.length > 0 && !scenes.some(s => s.id === sceneFilter)) {
+      setSceneFilter('all');
+    }
+  }, [scenes, sceneFilter]);
+
+  useEffect(() => {
+    if (!selectedResource) return;
+    if (!sortedResources.some(r => r.id === selectedResource.id)) {
+      setSelectedResource(null);
+    }
+  }, [sortedResources, selectedResource]);
 
   useEffect(() => {
     if (selectedResource && sortedResources.length > 0) {
       const idx = sortedResources.findIndex(r => r.id === selectedResource.id);
       if (idx >= 0) setSelectedIndex(idx);
     }
-  }, [sortBy]);
+  }, [sortBy, sortedResources, selectedResource]);
 
   const handleCarouselScroll = useCallback(() => {
     if (sortedResources.length <= 1 || isScrollingProgrammatically.current) return;
@@ -242,8 +304,15 @@ export function ProjectResourcesTab() {
     if (!workspaceId || !projectId) return;
     setIsLoading(true);
     try {
-      const data = await getProjectResources(workspaceId, projectId);
+      const [data, sceneRows] = await Promise.all([
+        getProjectResources(workspaceId, projectId),
+        getProjectScenes(projectId).catch(err => {
+          console.warn('Failed to load project scenes:', err);
+          return [] as ProjectScene[];
+        }),
+      ]);
       setResources(data);
+      setScenes(sceneRows);
     } catch (err) {
       console.error('Failed to load project resources:', err);
     } finally {
@@ -486,6 +555,18 @@ export function ProjectResourcesTab() {
     );
   }
 
+  if (resources.length > 0 && sortedResources.length === 0) {
+    return (
+      <View style={styles.center}>
+        <Layers size={48} color={theme.colors.textMuted} />
+        <Text style={styles.emptyTitle}>No resources here</Text>
+        <Text style={styles.emptySubtitle}>
+          Try another scene or choose &quot;All&quot; to see every resource
+        </Text>
+      </View>
+    );
+  }
+
   const playbackUrl = selectedResource
     ? resolvePlaybackUrl({
         bunny_cdn_url: selectedResource.bunny_cdn_url,
@@ -538,6 +619,63 @@ export function ProjectResourcesTab() {
           </View>
         )}
       </View>
+      {scenes.length > 0 ? (
+        <View style={styles.sceneBar}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.sceneChipsContent}>
+            <TouchableOpacity
+              style={[styles.sceneChip, sceneFilter === 'all' && styles.sceneChipActive]}
+              onPress={() => setSceneFilter('all')}
+              activeOpacity={0.75}>
+              <Text
+                style={[styles.sceneChipText, sceneFilter === 'all' && styles.sceneChipTextActive]}
+                numberOfLines={1}>
+                All
+              </Text>
+            </TouchableOpacity>
+            {scenesSortedByName.map(scene => (
+              <TouchableOpacity
+                key={scene.id}
+                style={[
+                  styles.sceneChip,
+                  sceneFilter === scene.id && styles.sceneChipActive,
+                  scene.color ? {borderLeftWidth: 3, borderLeftColor: scene.color || theme.colors.accent} : null,
+                ]}
+                onPress={() => setSceneFilter(scene.id)}
+                activeOpacity={0.75}>
+                <Text
+                  style={[
+                    styles.sceneChipText,
+                    sceneFilter === scene.id && styles.sceneChipTextActive,
+                  ]}
+                  numberOfLines={1}>
+                  {scene.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            {hasUnassignedResources ? (
+              <TouchableOpacity
+                style={[
+                  styles.sceneChip,
+                  sceneFilter === '__unassigned' && styles.sceneChipActive,
+                ]}
+                onPress={() => setSceneFilter('__unassigned')}
+                activeOpacity={0.75}>
+                <Text
+                  style={[
+                    styles.sceneChipText,
+                    sceneFilter === '__unassigned' && styles.sceneChipTextActive,
+                  ]}
+                  numberOfLines={1}>
+                  Unassigned
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+          </ScrollView>
+        </View>
+      ) : null}
       <FlatList
         data={sortedResources}
         keyExtractor={r => r.id}
@@ -722,7 +860,7 @@ export function ProjectResourcesTab() {
                       <Text style={styles.swipeHintText}>Swipe right for previous</Text>
                     </View>
                   )}
-                  {selectedIndex < resources.length - 1 && (
+                  {selectedIndex < sortedResources.length - 1 && (
                     <View style={styles.swipeHintChip}>
                       <Text style={styles.swipeHintText}>Swipe left for next</Text>
                       <ChevronRight size={14} color={theme.colors.textMuted} />
@@ -973,6 +1111,40 @@ const styles = StyleSheet.create({
   sortMenuTextActive: {
     fontFamily: theme.typography.fontFamily.semibold,
     color: theme.colors.accent,
+  },
+  sceneBar: {
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.surfaceBorder,
+    paddingVertical: theme.spacing.sm,
+  },
+  sceneChipsContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: theme.spacing.md,
+    paddingRight: theme.spacing.lg,
+  },
+  sceneChip: {
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.surfaceBorder,
+    maxWidth: 200,
+  },
+  sceneChipActive: {
+    backgroundColor: theme.colors.accent + '28',
+    borderColor: theme.colors.accent,
+  },
+  sceneChipText: {
+    fontSize: theme.typography.fontSize.sm,
+    fontFamily: theme.typography.fontFamily.medium,
+    color: theme.colors.textMuted,
+  },
+  sceneChipTextActive: {
+    color: theme.colors.accent,
+    fontFamily: theme.typography.fontFamily.semibold,
   },
   list: {
     padding: theme.spacing.md,

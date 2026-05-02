@@ -14,7 +14,7 @@ module.exports = {
     userInterfaceStyle: 'automatic',
     ios: {
       bundleIdentifier: 'app.posthive.companion',
-      buildNumber: '5',
+      buildNumber: '7',
     },
     android: {
       package: 'com.posthivecompanion',

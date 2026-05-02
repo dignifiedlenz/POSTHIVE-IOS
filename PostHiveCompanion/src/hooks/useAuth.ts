@@ -146,7 +146,7 @@ export function useAuthState() {
         // AsyncStorage can be slow to hydrate on cold start (e.g. when not connected to Metro).
         // Retry once after a short delay to allow storage to be ready.
         if (retryCount < 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+          await new Promise<void>(resolve => setTimeout(() => resolve(), 500));
           if (isMountedRef.current) {
             return refreshAuthState(retryCount + 1);
           }
@@ -240,6 +240,8 @@ export function useAuthState() {
           setUser(null);
           setWorkspaces([]);
           setCurrentWorkspace(null);
+          setPreferredWorkspaceId(null);
+          setIsLoading(false);
         }
       },
     );
@@ -297,10 +299,9 @@ export function useAuthState() {
   const signOut = useCallback(async () => {
     setIsLoading(true);
     setError(null);
-    
+
     try {
       await supabaseSignOut();
-      // Clear stored credentials on sign out
       await clearCredentials();
       setUser(null);
       setSession(null);
@@ -308,9 +309,18 @@ export function useAuthState() {
       setCurrentWorkspace(null);
       setPreferredWorkspaceId(null);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Sign out failed';
-      setError(message);
-      throw err;
+      console.warn('[mobile-auth] primary signOut failed, forcing local clear', err);
+      try {
+        await supabase.auth.signOut({scope: 'local'});
+      } catch {
+        // ignore
+      }
+      await clearCredentials().catch(() => {});
+      setUser(null);
+      setSession(null);
+      setWorkspaces([]);
+      setCurrentWorkspace(null);
+      setPreferredWorkspaceId(null);
     } finally {
       setIsLoading(false);
     }

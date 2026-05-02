@@ -70,6 +70,7 @@ function SeriesCard({series, onPress}: SeriesCardProps) {
 
 export function SeriesListScreen() {
   const navigation = useNavigation<NavigationProp>();
+  const canGoBack = navigation.canGoBack();
   const {currentWorkspace} = useAuth();
   const [series, setSeries] = useState<Series[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -117,12 +118,16 @@ export function SeriesListScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-          hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
-          <ChevronLeft size={22} color={theme.colors.textPrimary} />
-        </TouchableOpacity>
+        {canGoBack ? (
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+            hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+            <ChevronLeft size={22} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.backButton} />
+        )}
         <Text style={styles.headerTitle}>SERIES</Text>
         <View style={styles.backButton} />
       </View>

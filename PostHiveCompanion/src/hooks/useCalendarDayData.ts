@@ -108,6 +108,8 @@ interface CalendarDayData {
 interface UseCalendarDayDataOptions {
   workspaceId: string;
   userId: string;
+  /** When false, skip network/cache/realtime (e.g. workspace editors without a calendar tab). */
+  fetchEnabled?: boolean;
 }
 
 // ===== HOOK =====
@@ -115,6 +117,7 @@ interface UseCalendarDayDataOptions {
 export function useCalendarDayData({
   workspaceId,
   userId,
+  fetchEnabled = true,
 }: UseCalendarDayDataOptions): CalendarDayData {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
@@ -129,6 +132,18 @@ export function useCalendarDayData({
   const hydratedRef = useRef<string | null>(null);
 
   const fetchData = useCallback(async () => {
+    if (!fetchEnabled) {
+      setTodos([]);
+      setScheduledTasks([]);
+      setCalendarEvents([]);
+      setBlockedTimes([]);
+      setDeadlines([]);
+      setError(null);
+      setLoading(false);
+      hydratedRef.current = null;
+      return;
+    }
+
     if (!workspaceId || !userId) {
       setLoading(false);
       return;
@@ -340,12 +355,17 @@ export function useCalendarDayData({
     } finally {
       setLoading(false);
     }
-  }, [workspaceId, userId]);
+  }, [workspaceId, userId, fetchEnabled]);
 
   // Hydrate from disk cache as soon as we have the workspace/user identity so
   // the calendar grid can render its previous snapshot instantly. Network
   // refresh kicks in right after via the fetch effect below.
   useEffect(() => {
+    if (!fetchEnabled) {
+      hydratedRef.current = null;
+      setLoading(false);
+      return;
+    }
     if (!workspaceId || !userId) return;
     let cancelled = false;
     const cacheId = `${workspaceId}:${userId}`;
@@ -367,7 +387,7 @@ export function useCalendarDayData({
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, userId]);
+  }, [workspaceId, userId, fetchEnabled]);
 
   // Fetch data on mount and when dependencies change
   useEffect(() => {
@@ -376,7 +396,7 @@ export function useCalendarDayData({
 
   // Real-time subscription for updates
   useEffect(() => {
-    if (!workspaceId || !userId) return;
+    if (!fetchEnabled || !workspaceId || !userId) return;
 
     const channel = supabase
       .channel('calendar-updates')
@@ -415,7 +435,7 @@ export function useCalendarDayData({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [workspaceId, userId, fetchData]);
+  }, [workspaceId, userId, fetchEnabled, fetchData]);
 
   return {
     todos,

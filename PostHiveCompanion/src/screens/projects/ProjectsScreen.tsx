@@ -76,7 +76,7 @@ function ProjectCard({project, onPress}: ProjectCardProps) {
 
 export function ProjectsScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const {currentWorkspace} = useAuth();
+  const {currentWorkspace, user} = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -85,12 +85,15 @@ export function ProjectsScreen() {
     if (!currentWorkspace?.id) return;
 
     try {
-      const data = await getProjects(currentWorkspace.id);
+      const data = await getProjects(currentWorkspace.id, {
+        userId: user?.id,
+        workspaceRole: currentWorkspace.role,
+      });
       setProjects(data);
     } catch (err) {
       console.error('Error loading projects:', err);
     }
-  }, [currentWorkspace?.id]);
+  }, [currentWorkspace?.id, currentWorkspace?.role, user?.id]);
 
   useEffect(() => {
     const init = async () => {

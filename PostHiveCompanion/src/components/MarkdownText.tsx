@@ -28,6 +28,8 @@ export type MarkdownTextProps = {
   children: string;
   style?: StyleProp<TextStyle>;
   linkColor?: string;
+  /** Smaller headings — use for web search and similar compact chat surfaces. */
+  dense?: boolean;
 };
 
 type Inline =
@@ -287,6 +289,7 @@ export function MarkdownText({
   children,
   style,
   linkColor = '#7CC4FF',
+  dense = false,
 }: MarkdownTextProps) {
   const blocks = useMemo(() => parseBlocks(children ?? ''), [children]);
 
@@ -302,12 +305,13 @@ export function MarkdownText({
               </Text>
             );
           case 'h': {
-            const headingStyle =
-              block.level === 1
+            const headingStyle = dense
+              ? styles.hDense
+              : block.level === 1
                 ? styles.h1
                 : block.level === 2
-                ? styles.h2
-                : styles.h3;
+                  ? styles.h2
+                  : styles.h3;
             return (
               <Text key={key} style={[headingStyle, style]}>
                 {renderInline(block.inline, [headingStyle, style], linkColor, key)}
@@ -413,6 +417,15 @@ const styles = StyleSheet.create({
     fontFamily: semiboldFamily,
     marginTop: 4,
     marginBottom: 4,
+  },
+  /** Headings in dense mode: same ballpark as body copy so chat layout doesn’t jump. */
+  hDense: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.typography.fontSize.md,
+    lineHeight: 22,
+    fontFamily: semiboldFamily,
+    marginTop: 2,
+    marginBottom: 6,
   },
   list: {
     marginBottom: 8,

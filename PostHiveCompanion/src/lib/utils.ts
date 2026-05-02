@@ -24,6 +24,14 @@ export function canAccessWorkspaceNotifications(
   return role !== 'editor';
 }
 
+export function isWorkspaceViewer(role: string | null | undefined): boolean {
+  return role === 'viewer';
+}
+
+export function isWorkspaceEditor(role: string | null | undefined): boolean {
+  return role === 'editor';
+}
+
 export function formatTimeAgo(date: string): string {
   return formatDistanceToNow(new Date(date), {addSuffix: true});
 }

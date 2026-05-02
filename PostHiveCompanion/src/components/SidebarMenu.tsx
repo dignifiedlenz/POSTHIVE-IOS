@@ -20,7 +20,7 @@ import {
 import {theme} from '../theme';
 import {useAuth} from '../hooks/useAuth';
 import {WorkspaceDropdownModal} from './WorkspaceDropdownModal';
-import {canAccessWorkspaceNotifications} from '../lib/utils';
+import {canAccessWorkspaceNotifications, isWorkspaceEditor, isWorkspaceViewer} from '../lib/utils';
 
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
 /** Slightly wider so right-aligned labels (e.g. NOTIFICATION SETTINGS) breathe. */
@@ -134,7 +134,30 @@ export function SidebarMenu({
   );
 
   const navPrimaryItems = useMemo(() => {
-    if (canAccessWorkspaceNotifications(currentWorkspace?.role)) {
+    const role = currentWorkspace?.role;
+    if (isWorkspaceViewer(role)) {
+      return [
+        {
+          label: 'Deliverables',
+          action: 'tab' as const,
+          route: 'MainTabs',
+          params: {screen: 'Deliverables', params: {screen: 'RecentDeliverables'}},
+          activeRoutes: [
+            'RecentDeliverables',
+            'SeriesList',
+            'SeriesItems',
+            'ProjectDeliverables',
+          ],
+        },
+      ];
+    }
+    if (isWorkspaceEditor(role)) {
+      // Match web WorkspaceNavigation: editors are project-scoped — no workspace Drive or Notifications.
+      return primaryItems.filter(
+        i => i.label !== 'Notifications' && i.label !== 'Drive',
+      );
+    }
+    if (canAccessWorkspaceNotifications(role)) {
       return primaryItems;
     }
     return primaryItems.filter(i => i.label !== 'Notifications');

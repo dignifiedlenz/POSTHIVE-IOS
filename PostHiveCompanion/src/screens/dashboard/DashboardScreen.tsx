@@ -31,7 +31,7 @@ import {useCalendarDayData} from '../../hooks/useCalendarDayData';
 import {useWidgetSync} from '../../hooks/useWidgetSync';
 import {TodoItem} from '../../components/TodoItem';
 import {NotificationItem} from '../../components/NotificationItem';
-import {capitalizeFirst, canAccessWorkspaceNotifications} from '../../lib/utils';
+import {capitalizeFirst, canAccessWorkspaceNotifications, isWorkspaceEditor} from '../../lib/utils';
 import {VoiceCommandModal} from '../../components/VoiceCommandModal';
 import {Deliverable, Todo, Notification, CalendarEvent} from '../../lib/types';
 import {DashboardStackParamList} from '../../app/App';
@@ -85,6 +85,9 @@ export function DashboardScreen() {
   const workspaceNotificationsEnabled = canAccessWorkspaceNotifications(
     currentWorkspace?.role,
   );
+  const dashboardCalendarEnabled = !isWorkspaceEditor(currentWorkspace?.role);
+  const tasksSectionAnimIndex = dashboardCalendarEnabled ? 1 : 0;
+  const deadlinesSectionAnimIndex = dashboardCalendarEnabled ? 2 : 1;
 
   // Time-of-day greeting + best-effort first name pulled from Supabase auth metadata.
   // Falls back to the local-part of the email so we never render an empty name.
@@ -145,6 +148,7 @@ export function DashboardScreen() {
   const {calendarEvents, refresh: refreshCalendar} = useCalendarDayData({
     workspaceId: currentWorkspace?.id || '',
     userId: user?.id || '',
+    fetchEnabled: dashboardCalendarEnabled,
   });
 
   // Handle deep link to open notifications
@@ -599,6 +603,7 @@ export function DashboardScreen() {
           )}
         </View>
         {/* Calendar — next up */}
+        {dashboardCalendarEnabled ? (
         <Animated.View
           style={[
             styles.calendarSection,
@@ -689,14 +694,16 @@ export function DashboardScreen() {
             </TouchableOpacity>
           )}
         </Animated.View>
+        ) : null}
 
         {/* Tasks section */}
         <Animated.View style={[
           styles.tasksSection,
+          !dashboardCalendarEnabled && styles.calendarSectionFirst,
           upcomingDeadlines.length === 0 && styles.tasksSectionLast,
           {
-            opacity: sectionAnimations[1],
-            transform: [{translateY: sectionAnimations[1].interpolate({
+            opacity: sectionAnimations[tasksSectionAnimIndex],
+            transform: [{translateY: sectionAnimations[tasksSectionAnimIndex].interpolate({
               inputRange: [0, 1],
               outputRange: [15, 0],
             })}],
@@ -728,8 +735,8 @@ export function DashboardScreen() {
         {/* Deliverable deadlines (today onward only) */}
         {upcomingDeadlines.length > 0 && (
           <Animated.View style={[styles.deadlineSection, {
-            opacity: sectionAnimations[2],
-            transform: [{translateY: sectionAnimations[2].interpolate({
+            opacity: sectionAnimations[deadlinesSectionAnimIndex],
+            transform: [{translateY: sectionAnimations[deadlinesSectionAnimIndex].interpolate({
               inputRange: [0, 1],
               outputRange: [15, 0],
             })}],

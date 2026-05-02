@@ -193,7 +193,10 @@ export function CreationFlowScreen() {
       try {
         const [clientsData, projectsData] = await Promise.all([
           getClients(currentWorkspace.id),
-          getProjects(currentWorkspace.id),
+          getProjects(currentWorkspace.id, {
+            userId: user?.id,
+            workspaceRole: currentWorkspace.role,
+          }),
         ]);
         setClients(clientsData);
         setProjects(projectsData.filter(p => p.status === 'active'));
@@ -204,7 +207,7 @@ export function CreationFlowScreen() {
       }
     };
     loadData();
-  }, [currentWorkspace?.id]);
+  }, [currentWorkspace?.id, currentWorkspace?.role, user?.id]);
 
   const animateStepIn = useCallback(() => {
     stepOpacity.setValue(0);

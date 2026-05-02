@@ -31,7 +31,8 @@ import Reanimated, {
   useAnimatedStyle,
   type SharedValue,
 } from 'react-native-reanimated';
-import {useAuthState, AuthContext} from '../hooks/useAuth';
+import {useAuthState, AuthContext, useAuth} from '../hooks/useAuth';
+import {isWorkspaceEditor, isWorkspaceViewer} from '../lib/utils';
 import {SidebarDrawerProvider} from '../contexts/SidebarDrawerContext';
 import {SidebarMenu, SIDEBAR_WIDTH} from '../components/SidebarMenu';
 import {MainAppTopBar} from '../components/MainAppTopBar';
@@ -114,6 +115,20 @@ export type AssistantStackParamList = {
 
 export type DeliverablesStackParamList = {
   RecentDeliverables: undefined;
+  SeriesList: undefined;
+  SeriesItems: {
+    seriesId: string;
+    seriesName: string;
+    seriesDescription?: string;
+    thumbnailUrl?: string;
+    itemCount: number;
+  };
+  ProjectDeliverables: {
+    projectId: string;
+    projectName: string;
+    clientName?: string;
+    thumbnailUrl?: string;
+  };
 };
 
 export type ProjectsStackParamList = {
@@ -380,6 +395,9 @@ function DeliverablesStackNavigator() {
         gestureEnabled: true,
       }}>
       <DeliverablesStack.Screen name="RecentDeliverables" component={RecentDeliverablesRoot} />
+      <DeliverablesStack.Screen name="SeriesList" component={SeriesListScreen} />
+      <DeliverablesStack.Screen name="SeriesItems" component={SeriesItemsScreen} />
+      <DeliverablesStack.Screen name="ProjectDeliverables" component={ProjectDeliverablesScreen} />
     </DeliverablesStack.Navigator>
   );
 }
@@ -429,7 +447,7 @@ const nativeTabScreenOptions = {
   },
 };
 
-function IOSNativeMainTabs() {
+function IOSNativeMainTabs({hideCalendar}: {hideCalendar: boolean}) {
   return (
     <NativeTab.Navigator initialRouteName="Home" screenOptions={nativeTabScreenOptions}>
       <NativeTab.Screen
@@ -480,15 +498,36 @@ function IOSNativeMainTabs() {
           }),
         }}
       />
+      {!hideCalendar ? (
+        <NativeTab.Screen
+          name="Calendar"
+          component={CalendarStackNavigator}
+          options={{
+            title: 'Calendar',
+            tabBarLabel: 'Calendar',
+            tabBarIcon: ({focused}) => ({
+              type: 'sfSymbol',
+              name: focused ? 'calendar' : 'calendar',
+            }),
+          }}
+        />
+      ) : null}
+    </NativeTab.Navigator>
+  );
+}
+
+function IOSNativeViewerTabs() {
+  return (
+    <NativeTab.Navigator initialRouteName="Deliverables" screenOptions={nativeTabScreenOptions}>
       <NativeTab.Screen
-        name="Calendar"
-        component={CalendarStackNavigator}
+        name="Deliverables"
+        component={DeliverablesStackNavigator}
         options={{
-          title: 'Calendar',
-          tabBarLabel: 'Calendar',
+          title: 'Deliverables',
+          tabBarLabel: 'Deliverables',
           tabBarIcon: ({focused}) => ({
             type: 'sfSymbol',
-            name: focused ? 'calendar' : 'calendar',
+            name: focused ? 'play.rectangle.fill' : 'play.rectangle',
           }),
         }}
       />
@@ -506,7 +545,7 @@ const androidTabBarTheme = {
   },
 };
 
-function AndroidMaterialMainTabs() {
+function AndroidMaterialMainTabs({hideCalendar}: {hideCalendar: boolean}) {
   return (
     <JsTab.Navigator initialRouteName="Home" screenOptions={{headerShown: false, ...androidTabBarTheme}}>
       <JsTab.Screen
@@ -541,12 +580,29 @@ function AndroidMaterialMainTabs() {
           tabBarIcon: ({color, size}) => <Layers size={size ?? 22} color={color} />,
         }}
       />
+      {!hideCalendar ? (
+        <JsTab.Screen
+          name="Calendar"
+          component={CalendarStackNavigator}
+          options={{
+            tabBarLabel: 'Calendar',
+            tabBarIcon: ({color, size}) => <CalendarGlyph size={size ?? 22} color={color} />,
+          }}
+        />
+      ) : null}
+    </JsTab.Navigator>
+  );
+}
+
+function AndroidViewerTabs() {
+  return (
+    <JsTab.Navigator initialRouteName="Deliverables" screenOptions={{headerShown: false, ...androidTabBarTheme}}>
       <JsTab.Screen
-        name="Calendar"
-        component={CalendarStackNavigator}
+        name="Deliverables"
+        component={DeliverablesStackNavigator}
         options={{
-          tabBarLabel: 'Calendar',
-          tabBarIcon: ({color, size}) => <CalendarGlyph size={size ?? 22} color={color} />,
+          tabBarLabel: 'Deliverables',
+          tabBarIcon: ({color, size}) => <Film size={size ?? 22} color={color} />,
         }}
       />
     </JsTab.Navigator>
@@ -604,12 +660,15 @@ function AuthenticatedApp({userId, workspaceId}: AuthenticatedAppProps) {
   const previousWorkspaceId = useRef<string | undefined>(workspaceId);
   const {pendingVoiceCommand} = useTabBar();
   const lastRoutedVoiceNonce = useRef(0);
+  const {currentWorkspace} = useAuth();
+  const workspaceRole = currentWorkspace?.role;
 
   // Route any committed voice command to the assistant tab so the AssistantChatScreen can
   // pick it up and submit. We don't consume `pendingVoiceCommand` here — that's the assistant
   // screen's job after it sends.
   useEffect(() => {
     if (!pendingVoiceCommand) return;
+    if (isWorkspaceViewer(workspaceRole)) return;
     if (pendingVoiceCommand.nonce === lastRoutedVoiceNonce.current) return;
     lastRoutedVoiceNonce.current = pendingVoiceCommand.nonce;
     if (currentRoute === 'AssistantChat') return;
@@ -617,7 +676,7 @@ function AuthenticatedApp({userId, workspaceId}: AuthenticatedAppProps) {
       screen: 'Assistant',
       params: {screen: 'AssistantChat'},
     });
-  }, [pendingVoiceCommand, currentRoute]);
+  }, [pendingVoiceCommand, currentRoute, workspaceRole]);
 
   const getActiveRouteName = useCallback((state: any): string => {
     const route = state?.routes?.[state.index ?? 0];
@@ -631,22 +690,29 @@ function AuthenticatedApp({userId, workspaceId}: AuthenticatedAppProps) {
   }, []);
 
   // Initialize push notifications
-  usePushNotificationHandler(userId, workspaceId, navigationRef);
+  usePushNotificationHandler(userId, workspaceId, workspaceRole, navigationRef);
 
   // Handle deep links
   useEffect(() => {
     const handleDeepLink = (url: string, isInitial = false) => {
       console.log('Deep link received:', url);
-      
+
       if (url.startsWith('posthive://')) {
         const path = url.replace('posthive://', '');
         let handled = true;
-        
+
         if (path === 'activity') {
-          navigationRef.current?.navigate('MainTabs', {
-            screen: 'Home',
-            params: {screen: 'Dashboard'},
-          });
+          if (isWorkspaceViewer(workspaceRole)) {
+            navigationRef.current?.navigate('MainTabs', {
+              screen: 'Deliverables',
+              params: {screen: 'RecentDeliverables'},
+            });
+          } else {
+            navigationRef.current?.navigate('MainTabs', {
+              screen: 'Home',
+              params: {screen: 'Dashboard'},
+            });
+          }
         } else if (path.startsWith('deliverable/')) {
           const deliverableId = path.replace('deliverable/', '');
           navigationRef.current?.navigate('DeliverableReview', {deliverableId});
@@ -656,20 +722,46 @@ function AuthenticatedApp({userId, workspaceId}: AuthenticatedAppProps) {
             params: {screen: 'RecentDeliverables'},
           });
         } else if (path === 'series') {
-          navigationRef.current?.navigate('MainTabs', {
-            screen: 'Projects',
-            params: {screen: 'SeriesList'},
-          });
+          if (isWorkspaceViewer(workspaceRole)) {
+            navigationRef.current?.navigate('MainTabs', {
+              screen: 'Deliverables',
+              params: {screen: 'SeriesList'},
+            });
+          } else {
+            navigationRef.current?.navigate('MainTabs', {
+              screen: 'Projects',
+              params: {screen: 'SeriesList'},
+            });
+          }
         } else if (path === 'calendar') {
-          navigationRef.current?.navigate('MainTabs', {
-            screen: 'Calendar',
-            params: {screen: 'Calendar'},
-          });
+          if (isWorkspaceEditor(workspaceRole)) {
+            navigationRef.current?.navigate('MainTabs', {
+              screen: 'Home',
+              params: {screen: 'Dashboard'},
+            });
+          } else if (isWorkspaceViewer(workspaceRole)) {
+            navigationRef.current?.navigate('MainTabs', {
+              screen: 'Deliverables',
+              params: {screen: 'RecentDeliverables'},
+            });
+          } else {
+            navigationRef.current?.navigate('MainTabs', {
+              screen: 'Calendar',
+              params: {screen: 'Calendar'},
+            });
+          }
         } else if (path === 'transfers') {
-          navigationRef.current?.navigate('MainTabs', {
-            screen: 'Home',
-            params: {screen: 'TransferHistory'},
-          });
+          if (isWorkspaceViewer(workspaceRole)) {
+            navigationRef.current?.navigate('MainTabs', {
+              screen: 'Deliverables',
+              params: {screen: 'RecentDeliverables'},
+            });
+          } else {
+            navigationRef.current?.navigate('MainTabs', {
+              screen: 'Home',
+              params: {screen: 'TransferHistory'},
+            });
+          }
         } else {
           handled = false;
         }
@@ -681,21 +773,21 @@ function AuthenticatedApp({userId, workspaceId}: AuthenticatedAppProps) {
     };
 
     // Handle initial URL (app opened via deep link)
-    Linking.getInitialURL().then((url) => {
+    Linking.getInitialURL().then(url => {
       if (url) {
         handleDeepLink(url, true);
       }
     });
 
     // Handle deep links while app is running
-    const subscription = Linking.addEventListener('url', (event) => {
+    const subscription = Linking.addEventListener('url', event => {
       handleDeepLink(event.url);
     });
 
     return () => {
       subscription.remove();
     };
-  }, []);
+  }, [workspaceRole]);
 
   // Ensure dashboard is the default landing tab
   useEffect(() => {
@@ -800,9 +892,11 @@ function AuthenticatedApp({userId, workspaceId}: AuthenticatedAppProps) {
                 }}>
                 <View style={styles.authenticatedNavWrap}>
                   <AuthenticatedRoot />
-                  {currentRoute === 'AssistantChat' || currentRoute === 'Assistant' ? null : (
+                  {!isWorkspaceViewer(workspaceRole) &&
+                  currentRoute !== 'AssistantChat' &&
+                  currentRoute !== 'Assistant' ? (
                     <MainFloatingCreateFab />
-                  )}
+                  ) : null}
                 </View>
               </NavigationContainer>
             </SidebarDrawerProvider>
@@ -817,33 +911,52 @@ function AuthenticatedApp({userId, workspaceId}: AuthenticatedAppProps) {
 function usePushNotificationHandler(
   userId: string | undefined,
   workspaceId: string | undefined,
+  workspaceRole: string | undefined,
   navigationRef: React.RefObject<any>,
 ) {
-  const handleNotificationPress = useCallback((data: Record<string, unknown>) => {
-    if (data.deliverable_id) {
-      navigationRef.current?.navigate('DeliverableReview', {
-        deliverableId: data.deliverable_id as string,
-        versionId: data.version_id as string | undefined,
-        commentId: data.comment_id as string | undefined,
-      });
-    } else if (data.todo_id) {
-      navigationRef.current?.navigate('MainTabs', {
-        screen: 'Home',
-        params: {screen: 'Dashboard'},
-      });
-    } else if (data.project_id) {
-      navigationRef.current?.navigate('MainTabs', {
-        screen: 'Projects',
-        params: {
-          screen: 'ProjectDeliverables',
+  const handleNotificationPress = useCallback(
+    (data: Record<string, unknown>) => {
+      if (data.deliverable_id) {
+        navigationRef.current?.navigate('DeliverableReview', {
+          deliverableId: data.deliverable_id as string,
+          versionId: data.version_id as string | undefined,
+          commentId: data.comment_id as string | undefined,
+        });
+      } else if (data.todo_id) {
+        if (isWorkspaceViewer(workspaceRole)) {
+          navigationRef.current?.navigate('MainTabs', {
+            screen: 'Deliverables',
+            params: {screen: 'RecentDeliverables'},
+          });
+        } else {
+          navigationRef.current?.navigate('MainTabs', {
+            screen: 'Home',
+            params: {screen: 'Dashboard'},
+          });
+        }
+      } else if (data.project_id) {
+        const projectNav = {
+          screen: 'ProjectDeliverables' as const,
           params: {
             projectId: data.project_id as string,
             projectName: (data.project_name as string) || 'Project',
           },
-        },
-      });
-    }
-  }, [navigationRef]);
+        };
+        if (isWorkspaceViewer(workspaceRole)) {
+          navigationRef.current?.navigate('MainTabs', {
+            screen: 'Deliverables',
+            params: projectNav,
+          });
+        } else {
+          navigationRef.current?.navigate('MainTabs', {
+            screen: 'Projects',
+            params: projectNav,
+          });
+        }
+      }
+    },
+    [navigationRef, workspaceRole],
+  );
 
   // Initialize push notifications
   usePushNotifications({
@@ -871,19 +984,25 @@ function AuthenticatedRoot() {
 }
 
 function MainTabs() {
-  // iOS uses the SwiftUI-backed "liquid glass" navigator from
-  // `@react-navigation/bottom-tabs/unstable`. As-published it imports
-  // `BottomTabs` / `BottomTabsScreen` from `react-native-screens`, but RNS
-  // 4.24.0 only exposes those under the `Tabs` namespace (`Tabs.Host` /
-  // `Tabs.Screen`), so the imports resolve to `undefined` and the app
-  // red-screens with "Element type is invalid: ... NativeBottomTabView".
-  // We work around that with a local patch in
-  //   patches/@react-navigation+bottom-tabs+*.patch
-  // applied via `patch-package` on postinstall. Drop the patch once RNS
-  // re-exports the flat names (or react-navigation switches to the namespace).
+  const {currentWorkspace} = useAuth();
+  const viewer = isWorkspaceViewer(currentWorkspace?.role);
+  const editor = isWorkspaceEditor(currentWorkspace?.role);
+
+  if (viewer) {
+    return (
+      <View style={styles.mainTabsWrap}>
+        {Platform.OS === 'ios' ? <IOSNativeViewerTabs /> : <AndroidViewerTabs />}
+      </View>
+    );
+  }
+
   return (
     <View style={styles.mainTabsWrap}>
-      {Platform.OS === 'ios' ? <IOSNativeMainTabs /> : <AndroidMaterialMainTabs />}
+      {Platform.OS === 'ios' ? (
+        <IOSNativeMainTabs hideCalendar={editor} />
+      ) : (
+        <AndroidMaterialMainTabs hideCalendar={editor} />
+      )}
     </View>
   );
 }
@@ -936,6 +1055,13 @@ function AppContent() {
     const t = setTimeout(() => setForceShowWelcome(true), 3000);
     return () => clearTimeout(t);
   }, [authState.isLoading]);
+
+  // Once signed in with a workspace, don't keep the loading escape hatch on (it stacks Auth UI over the app).
+  useEffect(() => {
+    if (authState.isAuthenticated && authState.currentWorkspace && !authState.isLoading) {
+      setForceShowWelcome(false);
+    }
+  }, [authState.isAuthenticated, authState.currentWorkspace, authState.isLoading]);
 
   // Handle auth callback from browser (posthive://auth/callback?access_token=...&refresh_token=...)
   useEffect(() => {

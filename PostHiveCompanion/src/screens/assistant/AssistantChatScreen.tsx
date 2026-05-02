@@ -369,7 +369,12 @@ export function AssistantChatScreen() {
           styles.bubbleWrap,
           isUser ? styles.bubbleWrapUser : styles.bubbleWrapAssistant,
         ]}>
-        <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
+        <View
+          style={[
+            styles.bubble,
+            isUser ? styles.bubbleUser : styles.bubbleAssistant,
+            !isUser && isWebSearch && styles.bubbleWebSearch,
+          ]}>
           {isUser ? (
             <Text style={[styles.bubbleText, styles.bubbleTextUser]}>{item.text}</Text>
           ) : isWebSearch ? (
@@ -604,6 +609,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.04)',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.06)',
+  },
+  /** Web search chips use a horizontal ScrollView; clip so it cannot widen the bubble. */
+  bubbleWebSearch: {
+    overflow: 'hidden',
+    maxWidth: '88%',
   },
   bubbleText: {
     color: theme.colors.textPrimary,

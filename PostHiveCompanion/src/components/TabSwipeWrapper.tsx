@@ -3,17 +3,18 @@ import {View, StyleSheet} from 'react-native';
 import {Gesture, GestureDetector} from 'react-native-gesture-handler';
 import {runOnJS} from 'react-native-reanimated';
 import {useNavigation} from '@react-navigation/native';
+import {useAuth} from '../hooks/useAuth';
+import {isWorkspaceEditor, isWorkspaceViewer} from '../lib/utils';
 
-/** Must match `MainTabs` screen order (left → right). */
-const MAIN_TAB_ORDER = [
-  'Assistant',
-  'Home',
-  'Deliverables',
-  'Projects',
-  'Calendar',
-] as const;
-
-type MainTabName = (typeof MAIN_TAB_ORDER)[number];
+function getMainTabOrder(role: string | undefined): string[] {
+  if (isWorkspaceViewer(role)) {
+    return ['Deliverables'];
+  }
+  if (isWorkspaceEditor(role)) {
+    return ['Assistant', 'Home', 'Deliverables', 'Projects'];
+  }
+  return ['Assistant', 'Home', 'Deliverables', 'Projects', 'Calendar'];
+}
 
 function findMainTabNavigator(nav: {getParent?: () => unknown; getState?: () => unknown} | null): {
   navigate: (name: string) => void;
@@ -23,9 +24,11 @@ function findMainTabNavigator(nav: {getParent?: () => unknown; getState?: () => 
   for (let i = 0; i < 10 && cur; i++) {
     const state = cur.getState?.() as {routes?: {name: string}[]} | undefined;
     const routes = state?.routes;
-    if (Array.isArray(routes) && routes.length >= 3) {
+    if (Array.isArray(routes) && routes.length >= 1) {
       const names = new Set(routes.map(r => r.name));
-      if (names.has('Home') && names.has('Deliverables') && names.has('Assistant')) {
+      const looksLikeMainTabs =
+        names.has('Deliverables') && (names.has('Home') || routes.length === 1);
+      if (looksLikeMainTabs) {
         return cur;
       }
     }
@@ -43,6 +46,11 @@ const VELOCITY_MIN = 420;
  */
 export function TabSwipeWrapper({children}: {children: React.ReactNode}) {
   const navigation = useNavigation();
+  const {currentWorkspace} = useAuth();
+  const mainTabOrder = useMemo(
+    () => getMainTabOrder(currentWorkspace?.role),
+    [currentWorkspace?.role],
+  );
 
   const switchTab = useCallback(
     (direction: 'next' | 'prev') => {
@@ -52,19 +60,19 @@ export function TabSwipeWrapper({children}: {children: React.ReactNode}) {
       const state = tabNav.getState();
       const routes = state.routes ?? [];
       const idx = state.index ?? 0;
-      const currentName = routes[idx]?.name as MainTabName | undefined;
+      const currentName = routes[idx]?.name;
       if (!currentName) return;
 
-      const pos = MAIN_TAB_ORDER.indexOf(currentName);
+      const pos = mainTabOrder.indexOf(currentName);
       if (pos < 0) return;
 
       const delta = direction === 'next' ? 1 : -1;
       const nextPos = pos + delta;
-      if (nextPos < 0 || nextPos >= MAIN_TAB_ORDER.length) return;
+      if (nextPos < 0 || nextPos >= mainTabOrder.length) return;
 
-      tabNav.navigate(MAIN_TAB_ORDER[nextPos]);
+      tabNav.navigate(mainTabOrder[nextPos]);
     },
-    [navigation],
+    [navigation, mainTabOrder],
   );
 
   const pan = useMemo(

@@ -1417,14 +1417,67 @@ export async function getUserWorkspaces(userId: string): Promise<Workspace[]> {
 
 // ===== PROJECTS =====
 
-export async function getProjects(workspaceId: string): Promise<Project[]> {
+export async function getProjects(
+  workspaceId: string,
+  options?: {userId?: string; workspaceRole?: string | null},
+): Promise<Project[]> {
+  const role = options?.workspaceRole;
+  const userId = options?.userId;
+
+  let projects: any[];
+
+  if (
+    (role === 'editor' || role === 'viewer') &&
+    userId
+  ) {
+    const {data: assignments, error: assignError} = await supabase
+      .from('project_assignments')
+      .select(`
+        projects!project_id (
+          *,
+          clients!client_id (
+            id,
+            name
+          )
+        )
+      `)
+      .eq('user_id', userId)
+      .order('assigned_at', {ascending: false});
+
+    if (assignError) {
+      console.error('Assigned projects query error:', assignError);
+      throw assignError;
+    }
+
+    projects = (assignments || [])
+      .filter((a: any) => a.projects && a.projects.workspace_id === workspaceId)
+      .map((a: any) => ({
+        id: a.projects.id,
+        workspace_id: a.projects.workspace_id,
+        name: a.projects.name,
+        description: a.projects.description,
+        thumbnail: a.projects.thumbnail,
+        status: a.projects.status,
+        deadline: a.projects.deadline,
+        due_date: a.projects.due_date,
+        client_id: a.projects.client_id,
+        project_type: a.projects.project_type || 'video',
+        created_by: a.projects.created_by,
+        created_at: a.projects.created_at,
+        updated_at: a.projects.updated_at,
+        client: a.projects.clients
+          ? {
+              id: a.projects.clients.id,
+              name: a.projects.clients.name,
+            }
+          : null,
+      }));
+  } else {
   // Use RPC function to get projects ordered by most recent activity
   // (comments, versions, or deliverables - whichever is most recent)
   const {data: rpcData, error: rpcError} = await supabase
     .rpc('get_projects_with_activity', {workspace_id_param: workspaceId});
 
-  let projects: any[];
-  
   if (rpcError) {
     // Fallback to regular query if RPC fails
     console.warn('get_projects_with_activity RPC failed, falling back:', rpcError);
@@ -1493,7 +1546,8 @@ export async function getProjects(workspaceId: string): Promise<Project[]> {
       projects = [...projects, ...archivedProjects];
     }
   }
-  
+  }
+
   if (projects.length === 0) {
     return [];
   }
@@ -1901,6 +1955,53 @@ export interface ProjectResource {
   tags?: string[] | null;
   rating?: number | null;
   processing_status?: string | null;
+}
+
+export interface ProjectSceneClip {
+  id: string;
+  asset_id: string;
+  order_index: number;
+}
+
+export interface ProjectScene {
+  id: string;
+  name: string;
+  color?: string | null;
+  order_index: number;
+  clips: ProjectSceneClip[];
+}
+
+/** Scenes for a project (resource browser). Clips are ordered by `order_index`. */
+export async function getProjectScenes(projectId: string): Promise<ProjectScene[]> {
+  const {data, error} = await supabase
+    .from('scenes')
+    .select(
+      `
+      id,
+      name,
+      color,
+      order_index,
+      clips:scene_clips(id, asset_id, order_index)
+    `,
+    )
+    .eq('project_id', projectId)
+    .order('order_index', {ascending: true});
+
+  if (error) throw error;
+
+  return (data || []).map((row: any) => ({
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    order_index: row.order_index,
+    clips: (row.clips || [])
+      .map((c: any) => ({
+        id: c.id,
+        asset_id: c.asset_id,
+        order_index: c.order_index,
+      }))
+      .sort((a: ProjectSceneClip, b: ProjectSceneClip) => a.order_index - b.order_index),
+  }));
 }
 
 export async function getProjectResources(

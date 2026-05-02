@@ -140,10 +140,15 @@ export async function createSessionFromUrl(url: string): Promise<{access_token: 
 }
 
 export const signOut = async () => {
-  const {error} = await supabase.auth.signOut();
+  // Use local scope so AsyncStorage/session clears without waiting on server revoke.
+  // Global sign-out often fails offline or on flaky networks and leaves users stuck signed in.
+  const {error} = await supabase.auth.signOut({scope: 'local'});
   if (error) {
     throw error;
   }
+  void supabase.auth.signOut({scope: 'global'}).catch(() => {
+    // Best-effort server revoke; ignore failures after local session is already gone.
+  });
 };
 
 export const getSession = async () => {
